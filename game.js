@@ -140,7 +140,11 @@
   }
 
   function newPlayer(team,role,side,x,y){
-    return {team,role,side,x,y,vx:0,vy:0,r:25,homeX:x,homeY:y,hasBall:false};
+    return {
+      team,role,side,x,y,vx:0,vy:0,r:25,homeX:x,homeY:y,hasBall:false,
+      staggerUntil:0,
+      hitFlashUntil:0
+    };
   }
 
   function resetMatch(){
@@ -400,6 +404,17 @@
     state.sixSecond=6;
   }
 
+  function isStaggered(player,now=performance.now()){
+    return now<player.staggerUntil;
+  }
+
+  function knockBackFieldPlayer(player,direction,distance,staggerMs){
+    player.x+=direction.x*distance;
+    player.y+=direction.y*distance;
+    player.staggerUntil=performance.now()+staggerMs;
+    player.hitFlashUntil=performance.now()+140;
+  }
+
   function updateHuman(dt){
     const combinedX=state.keyboardMove.x+state.touchMove.x;
     const combinedY=state.keyboardMove.y+state.touchMove.y;
@@ -410,6 +425,13 @@
 
     const p=state.players[state.controlled];
     const m=state.move;
+
+    if(isStaggered(p)){
+      p.vx=0;
+      p.vy=0;
+      return;
+    }
+
     const speed=350;
     p.vx=m.x*speed;p.vy=m.y*speed;
     p.x+=p.vx*dt;p.y+=p.vy*dt;
@@ -431,6 +453,10 @@
         b.lastTouch=2;b.noPickupUntil=performance.now()+180;
       }
     }
+    if(isStaggered(f)){
+      return;
+    }
+
     const d=norm(tx-f.x,ty-f.y);
     const mult=state.settings.difficulty==="easy"?0.72:state.settings.difficulty==="hard"?1.06:0.88;
     f.x+=d.x*310*mult*dt;f.y+=d.y*310*mult*dt;
@@ -525,40 +551,100 @@
           if(now<b.contactLockUntil) break;
 
           const lastTouchTeam =
-  b.lastTouch === null ? null : teamOfPlayerIndex(b.lastTouch);
+            b.lastTouch === null ? null : teamOfPlayerIndex(b.lastTouch);
 
-const isTeammateLob =
-  b.airborne &&
-  b.height > 14 &&
-  lastTouchTeam === teamOfPlayerIndex(i);
+          const isTeammateLob =
+            b.airborne &&
+            b.height > 14 &&
+            lastTouchTeam === teamOfPlayerIndex(i);
 
-if(isTeammateLob){
-  // 味方の浮きパスだけ自動ボレーする。
-  const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
-  const d=norm(COURT.cx-b.x,targetY-b.y);
+          const speed=Math.hypot(b.vx,b.vy);
 
-  b.vx=d.x*760;
-  b.vy=d.y*760;
-  b.vz=105;
-  b.height=Math.max(8,b.height*0.35);
-  b.lastTouch=i;
-  b.noPickupUntil=now+320;
-  b.contactLockUntil=now+320;
+          if(isTeammateLob){
+            // 味方の浮きパスだけ自動ボレー。
+            const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
+            const d=norm(COURT.cx-b.x,targetY-b.y);
 
-          }else if(Math.hypot(b.vx,b.vy)<285){
+            b.vx=d.x*760;
+            b.vy=d.y*760;
+            b.vz=105;
+            b.height=Math.max(8,b.height*0.35);
+            b.lastTouch=i;
+            b.noPickupUntil=now+320;
+            b.contactLockUntil=now+320;
+
+          }else if(p.role==="field" && speed<300){
+            // 低速球は反射せず、その選手にくっつく。
             holdBall(i);
             b.contactLockUntil=now+180;
+
+          }else if(p.role==="field" && speed<700){
+            // 通常シュート：軽く吹き飛ばし、ボールは約90度横へこぼれる。
+            const incoming=norm(b.vx,b.vy);
+            const hitDirection=incoming;
+            knockBackFieldPlayer(p,hitDirection,22,230);
+
+            const side=(Math.random()<0.5?-1:1);
+            const spillDirection={
+              x:-incoming.y*side,
+              y: incoming.x*side
+            };
+            const spillSpeed=clamp(speed*0.28,105,210);
+
+            b.vx=spillDirection.x*spillSpeed;
+            b.vy=spillDirection.y*spillSpeed;
+            b.airborne=false;
+            b.height=0;
+            b.vz=0;
+            b.bounceCount=0;
+            b.noPickupUntil=now+230;
+            b.contactLockUntil=now+260;
+            b.lastTouch=i;
+
+            // 選手の身体から外へ出して再接触を防ぐ。
+            b.x+=spillDirection.x*26;
+            b.y+=spillDirection.y*26;
+
+          }else if(p.role==="field"){
+            // 高速球：選手を大きく吹き飛ばし、ボールの勢いはほぼ消える。
+            const incoming=norm(b.vx,b.vy);
+            knockBackFieldPlayer(p,incoming,55,430);
+
+            const side=(Math.random()<0.5?-1:1);
+            const softDirection=norm(
+              incoming.x*0.25-incoming.y*side,
+              incoming.y*0.25+incoming.x*side
+            );
+            const softSpeed=clamp(speed*0.08,55,115);
+
+            b.vx=softDirection.x*softSpeed;
+            b.vy=softDirection.y*softSpeed;
+            b.airborne=true;
+            b.height=Math.max(3,b.height*0.2);
+            b.vz=80;
+            b.bounceCount=0;
+            b.noPickupUntil=now+280;
+            b.contactLockUntil=now+320;
+            b.lastTouch=i;
+
+            b.x+=softDirection.x*30;
+            b.y+=softDirection.y*30;
+
+          }else if(speed<285){
+            // GKの既存簡易処理：低速球は保持。
+            holdBall(i);
+            b.contactLockUntil=now+180;
+
           }else{
-            // 強い球は正面へ返さず、横へ大きくこぼし、速度を大幅に失う。
-            const s=Math.hypot(b.vx,b.vy);
+            // GKの既存簡易処理：強い球は横へ弱くこぼす。
             const n=norm(b.vx,b.vy);
             const side=(Math.random()<.5?-1:1);
             const ang=side*(Math.PI/4.3);
             const rx=n.x*Math.cos(ang)-n.y*Math.sin(ang);
             const ry=n.x*Math.sin(ang)+n.y*Math.cos(ang);
 
-            b.vx=rx*s*0.18;
-            b.vy=ry*s*0.18;
+            b.vx=rx*speed*0.18;
+            b.vy=ry*speed*0.18;
             b.airborne=true;
             b.height=Math.max(b.height,3);
             b.vz=Math.max(b.vz,95);
@@ -567,7 +653,6 @@ if(isTeammateLob){
             b.contactLockUntil=now+300;
             b.lastTouch=i;
 
-            // 選手同士が密着している場所から外へ押し出す。
             const away=norm(b.x-p.x,b.y-p.y);
             b.x+=away.x*30;
             b.y+=away.y*30;
@@ -873,6 +958,22 @@ if(isTeammateLob){
     for(let i=0;i<state.players.length;i++){
       const p=state.players[i],t=teams[p.team];
       ctx.save();ctx.translate(p.x,p.y);
+
+      if(isStaggered(p)){
+        ctx.rotate(Math.sin(performance.now()/45)*0.12);
+        ctx.scale(1.14,0.82);
+      }
+
+      if(performance.now()<p.hitFlashUntil){
+        ctx.save();
+        ctx.globalAlpha=.45;
+        ctx.fillStyle="#ffffff";
+        ctx.beginPath();
+        ctx.arc(0,0,p.r+10,0,Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+
       ctx.beginPath();ctx.arc(0,0,p.r,0,Math.PI*2);ctx.fillStyle=t.primary;ctx.fill();
       if(t.pattern!=="solid"){
         ctx.save();ctx.beginPath();ctx.arc(0,0,p.r-2,0,Math.PI*2);ctx.clip();
