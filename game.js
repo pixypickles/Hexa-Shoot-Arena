@@ -94,20 +94,18 @@
   function makeWalls(){
     const c={x:COURT.cx,y:COURT.cy};
     const pts=[
-      {x:COURT.left+COURT.shoulder,y:COURT.top},
-      {x:COURT.left,y:COURT.cy-160},
-      {x:COURT.left,y:COURT.cy+160},
-      {x:COURT.left+COURT.shoulder,y:COURT.bottom},
-      {x:COURT.right-COURT.shoulder,y:COURT.bottom},
-      {x:COURT.right,y:COURT.cy+160},
-      {x:COURT.right,y:COURT.cy-160},
-      {x:COURT.right-COURT.shoulder,y:COURT.top}
-    ];
+  {x:COURT.left+COURT.shoulder,y:COURT.top},
+  {x:COURT.left,y:COURT.cy},
+  {x:COURT.left+COURT.shoulder,y:COURT.bottom},
+  {x:COURT.right-COURT.shoulder,y:COURT.bottom},
+  {x:COURT.right,y:COURT.cy},
+  {x:COURT.right-COURT.shoulder,y:COURT.top}
+];
     const walls=[];
     for(let i=0;i<pts.length;i++){
       const a=pts[i], b=pts[(i+1)%pts.length];
       // top/bottom central opening for goals
-      if ((i===7 || i===3)) continue;
+      if ((i===5 || i===2)) continue;
       walls.push(segment(a,b,c));
     }
 
