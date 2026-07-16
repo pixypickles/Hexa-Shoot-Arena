@@ -85,6 +85,10 @@
     bButton:{
       lastTapAt:0
     },
+    chargeStep:{
+      usedThisCharge:false,
+      stickArmed:true
+    },
     ball:{
       x:W/2,y:H/2,vx:0,vy:0,r:14,visualR:17,
       airborne:false,height:0,vz:0,
@@ -189,6 +193,8 @@
     state.step.flashUntil=0;
     state.step.shotBonusUntil=0;
     state.step.lastDirection={x:0,y:0};
+    state.chargeStep.usedThisCharge=false;
+    state.chargeStep.stickArmed=true;
     state.possessionTeam=null;
     state.possessionPlayer=null;
     state.lastPossessionTeam=null;
@@ -362,6 +368,8 @@
     state.charge.level=0;
     state.charge.stage=0;
     state.charge.pointerId=pointerId;
+    state.chargeStep.usedThisCharge=false;
+    state.chargeStep.stickArmed=true;
   }
 
   function releaseCharge(type){
@@ -384,6 +392,8 @@
     state.charge.level=0;
     state.charge.stage=0;
     state.charge.pointerId=null;
+    state.chargeStep.usedThisCharge=false;
+    state.chargeStep.stickArmed=true;
   }
 
   function startGame(){
@@ -528,6 +538,43 @@
     if(state.possessionPlayer===state.controlled){
       holdBall(state.controlled);
     }
+    return true;
+  }
+
+  function performChargeStep(direction,now=performance.now()){
+    const player=state.players[state.controlled];
+
+    if(!state.charge.active) return false;
+    if(state.chargeStep.usedThisCharge) return false;
+    if(!player || isStaggered(player,now)) return false;
+    if(now-state.charge.startedAt<150) return false;
+    if(now<state.step.cooldownUntil) return false;
+
+    const n=norm(direction.x,direction.y);
+    const distance=40;
+
+    player.x+=n.x*distance;
+    player.y+=n.y*distance;
+
+    player.x=clamp(player.x,COURT.left+player.r,COURT.right-player.r);
+    if(player.side==="bottom"){
+      player.y=clamp(player.y,COURT.cy+player.r,COURT.bottom-player.r);
+    }else{
+      player.y=clamp(player.y,COURT.top+player.r,COURT.cy-player.r);
+    }
+
+    state.step.cooldownUntil=now+780;
+    state.step.flashUntil=now+220;
+    state.step.shotBonusUntil=now+190;
+    state.step.lastDirection={x:n.x,y:n.y};
+
+    state.chargeStep.usedThisCharge=true;
+    state.chargeStep.stickArmed=false;
+
+    if(state.possessionPlayer===state.controlled){
+      holdBall(state.controlled);
+    }
+
     return true;
   }
 
@@ -1326,6 +1373,21 @@
 
     if(state.charge.active){
       const p=state.players[state.controlled];
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,.45)";
+      ctx.fillRect(W/2-150,H-64,300,28);
+      ctx.fillStyle="#d9fff8";
+      ctx.font="800 14px system-ui";
+      ctx.textAlign="center";
+      ctx.fillText(
+        state.chargeStep.usedThisCharge
+          ? "チャージステップ使用済み"
+          : "スティックを大きく倒すとチャージステップ",
+        W/2,
+        H-45
+      );
+      ctx.restore();
       const pulse=1+Math.sin(performance.now()/70)*0.05;
 
       ctx.save();
@@ -1373,8 +1435,8 @@
     state.keys[e.code]=true;
 
     const stepDirection=keyboardDirectionFromCode(e.code);
-    if(stepDirection){
-      tryDirectionTap(stepDirection.x,stepDirection.y);
+    if(stepDirection && state.charge.active){
+      performChargeStep(stepDirection);
     }
 
     if(e.code==="KeyL"){
@@ -1427,19 +1489,30 @@
     state.touchMove={x:dx/max,y:dy/max};
 
     const strength=Math.hypot(state.touchMove.x,state.touchMove.y);
+    const now=performance.now();
 
     if(strength>Math.hypot(stickPeak.x,stickPeak.y)){
       stickPeak={...state.touchMove};
     }
 
-    // スマホでは「倒す→中央へ戻す→同方向へもう一度倒す」でステップ。
+    // チャージ中は、スティックを大きく倒すだけで1回だけ瞬間ステップ。
+    if(state.charge.active){
+      if(strength<0.35){
+        state.chargeStep.stickArmed=true;
+      }else if(
+        strength>=0.82 &&
+        state.chargeStep.stickArmed &&
+        !state.chargeStep.usedThisCharge
+      ){
+        performChargeStep(state.touchMove,now);
+      }
+      return;
+    }
+
+    // 通常時の方向ダブル入力ステップは使わない。
     if(strength<0.22){
       stickReturnedCenter=true;
       stickWasPushed=false;
-    }else if(strength>=0.62 && (!stickWasPushed || stickReturnedCenter)){
-      tryDirectionTap(state.touchMove.x,state.touchMove.y,performance.now());
-      stickWasPushed=true;
-      stickReturnedCenter=false;
     }
   }
   stick.addEventListener("pointerdown",e=>{
