@@ -20,8 +20,9 @@
     left: 170, right: 1110,
     shoulder: 170,
     goalWidth: 250,
-    curveDepth: 28,
-    curveSegments: 8,
+    bumperRadius: 34,
+    bumperSideOffset: 62,
+    bumperGoalOffset: 66,
     ridgeHalfWidth: 22,
     ridgeVisualHeight: 15
   };
@@ -80,10 +81,12 @@
       wobble:0, wobblePhase:0,
       previousY:H/2, ridgeCooldown:0,
       bounceCount:0,
-      contactLockUntil:0
+      contactLockUntil:0,
+      bumperLockUntil:0
     },
     players:[],
-    walls:[]
+    walls:[],
+    bumpers:[]
   };
 
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -93,43 +96,39 @@
 
   function makeWalls(){
     const c={x:COURT.cx,y:COURT.cy};
+    const half=COURT.goalWidth/2;
+
     const pts=[
-  {x:COURT.left+COURT.shoulder,y:COURT.top},
-  {x:COURT.left,y:COURT.cy},
-  {x:COURT.left+COURT.shoulder,y:COURT.bottom},
-  {x:COURT.right-COURT.shoulder,y:COURT.bottom},
-  {x:COURT.right,y:COURT.cy},
-  {x:COURT.right-COURT.shoulder,y:COURT.top}
-];
+      {x:COURT.cx-half,y:COURT.top},
+      {x:COURT.left,y:COURT.cy},
+      {x:COURT.cx-half,y:COURT.bottom},
+      {x:COURT.cx+half,y:COURT.bottom},
+      {x:COURT.right,y:COURT.cy},
+      {x:COURT.cx+half,y:COURT.top}
+    ];
+
     const walls=[];
     for(let i=0;i<pts.length;i++){
       const a=pts[i], b=pts[(i+1)%pts.length];
-      // top/bottom central opening for goals
-      if ((i===5 || i===2)) continue;
+      if(i===5 || i===2) continue;
       walls.push(segment(a,b,c));
     }
 
-    const half=COURT.goalWidth/2;
-    function addCurve(top,left){
-      const y=top?COURT.top:COURT.bottom;
-      const startX=left ? COURT.left+COURT.shoulder : COURT.right-COURT.shoulder;
-      const goalX=COURT.cx+(left?-half:half);
-      const bendY=y+(top?COURT.curveDepth:-COURT.curveDepth);
-      const controlX=startX+(goalX-startX)*0.56;
-      let prev={x:startX,y};
-      for(let i=1;i<=COURT.curveSegments;i++){
-        const t=i/COURT.curveSegments,u=1-t;
-        const p={
-          x:u*u*startX+2*u*t*controlX+t*t*goalX,
-          y:u*u*y+2*u*t*bendY+t*t*y
-        };
-        walls.push(segment(prev,p,c));
-        prev=p;
-      }
-    }
-    addCurve(true,true); addCurve(true,false);
-    addCurve(false,true); addCurve(false,false);
     state.walls=walls;
+  }
+
+  function makeBumpers(){
+    const half=COURT.goalWidth/2;
+    const r=COURT.bumperRadius;
+    const side=COURT.bumperSideOffset;
+    const goal=COURT.bumperGoalOffset;
+
+    state.bumpers=[
+      {x:COURT.cx-half-side,y:COURT.top+goal,r,spin:1,angle:0,flashUntil:0},
+      {x:COURT.cx+half+side,y:COURT.top+goal,r,spin:-1,angle:0,flashUntil:0},
+      {x:COURT.cx-half-side,y:COURT.bottom-goal,r,spin:-1,angle:0,flashUntil:0},
+      {x:COURT.cx+half+side,y:COURT.bottom-goal,r,spin:1,angle:0,flashUntil:0}
+    ];
   }
 
   function segment(a,b,inside){
@@ -173,6 +172,7 @@
     ];
     resetBall();
     makeWalls();
+    makeBumpers();
   }
 
   function resetBall(){
@@ -184,7 +184,8 @@
       wobble:0,wobblePhase:0,
       previousY:H/2,ridgeCooldown:0,
       bounceCount:0,
-      contactLockUntil:0
+      contactLockUntil:0,
+      bumperLockUntil:0
     });
     state.possessionTeam=null;
     state.possessionPlayer=null;
@@ -513,6 +514,7 @@
     if(Math.hypot(b.vx,b.vy)<28){ b.vx=0;b.vy=0; }
 
     resolveWalls();
+    resolveSpinBumpers(now);
     b.stealth=Math.max(0,b.stealth-dt);
 
     if(now>b.noPickupUntil){
@@ -611,6 +613,56 @@ if(isTeammateLob){
     }
   }
 
+  function resolveSpinBumpers(now){
+    const b=state.ball;
+
+    for(const bumper of state.bumpers){
+      const dx=b.x-bumper.x;
+      const dy=b.y-bumper.y;
+      const distance=Math.hypot(dx,dy);
+      const minDistance=b.r+bumper.r;
+
+      if(distance>=minDistance || now<b.bumperLockUntil) continue;
+
+      const normal=norm(dx,dy);
+      const tangent={x:-normal.y*bumper.spin,y:normal.x*bumper.spin};
+      const speed=Math.max(360,Math.hypot(b.vx,b.vy));
+
+      const penetration=minDistance-distance+1;
+      b.x+=normal.x*penetration;
+      b.y+=normal.y*penetration;
+
+      const incomingDot=b.vx*normal.x+b.vy*normal.y;
+      let reflectedX=b.vx-2*incomingDot*normal.x;
+      let reflectedY=b.vy-2*incomingDot*normal.y;
+
+      const reflectedLength=Math.hypot(reflectedX,reflectedY) || 1;
+      reflectedX/=reflectedLength;
+      reflectedY/=reflectedLength;
+
+      const goalY=bumper.y<COURT.cy ? COURT.top-20 : COURT.bottom+20;
+      const goalDirection=norm(COURT.cx-b.x,goalY-b.y);
+
+      const finalX=reflectedX*0.48+tangent.x*0.32+goalDirection.x*0.20;
+      const finalY=reflectedY*0.48+tangent.y*0.32+goalDirection.y*0.20;
+      const finalDirection=norm(finalX,finalY);
+
+      const boostedSpeed=clamp(speed*1.22,520,1050);
+      b.vx=finalDirection.x*boostedSpeed;
+      b.vy=finalDirection.y*boostedSpeed;
+
+      b.airborne=true;
+      b.height=Math.max(5,b.height);
+      b.vz=Math.max(b.vz,155);
+      b.bounceCount=0;
+
+      b.bumperLockUntil=now+340;
+      b.noPickupUntil=now+180;
+      b.contactLockUntil=now+180;
+      bumper.flashUntil=now+120;
+    }
+  }
+
   function resolveWalls(){
     const b=state.ball;
     for(const w of state.walls){
@@ -662,6 +714,7 @@ if(isTeammateLob){
     ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
 
     drawCourt();
+    drawSpinBumpers();
     drawPlayers();
     drawBall();
     drawHUD();
@@ -678,34 +731,65 @@ if(isTeammateLob){
 
   function drawCourt(){
     const g=ctx;
+    const half=COURT.goalWidth/2;
+
     g.save();
     g.fillStyle="#155044";
     g.strokeStyle="#8ce9dc";
     g.lineWidth=7;
+    g.lineJoin="round";
+
     g.beginPath();
-    g.moveTo(COURT.left+COURT.shoulder,COURT.top);
-    g.lineTo(COURT.left,COURT.cy-160);
-    g.lineTo(COURT.left,COURT.cy+160);
-    g.lineTo(COURT.left+COURT.shoulder,COURT.bottom);
-    g.lineTo(COURT.right-COURT.shoulder,COURT.bottom);
-    g.lineTo(COURT.right,COURT.cy+160);
-    g.lineTo(COURT.right,COURT.cy-160);
-    g.lineTo(COURT.right-COURT.shoulder,COURT.top);
-    g.closePath();g.fill();g.stroke();
+    g.moveTo(COURT.cx-half,COURT.top);
+    g.lineTo(COURT.left,COURT.cy);
+    g.lineTo(COURT.cx-half,COURT.bottom);
+    g.lineTo(COURT.cx+half,COURT.bottom);
+    g.lineTo(COURT.right,COURT.cy);
+    g.lineTo(COURT.cx+half,COURT.top);
+    g.closePath();
+    g.fill();
 
-    g.strokeStyle="rgba(170,230,223,.65)";g.lineWidth=3;
-    g.beginPath();g.moveTo(COURT.left,COURT.cy);g.lineTo(COURT.right,COURT.cy);g.stroke();
-    g.beginPath();g.arc(COURT.cx,COURT.cy,70,0,Math.PI*2);g.stroke();
+    const edges=[
+      [{x:COURT.cx-half,y:COURT.top},{x:COURT.left,y:COURT.cy}],
+      [{x:COURT.left,y:COURT.cy},{x:COURT.cx-half,y:COURT.bottom}],
+      [{x:COURT.cx+half,y:COURT.bottom},{x:COURT.right,y:COURT.cy}],
+      [{x:COURT.right,y:COURT.cy},{x:COURT.cx+half,y:COURT.top}]
+    ];
+    for(const [a,b] of edges){
+      g.beginPath();
+      g.moveTo(a.x,a.y);
+      g.lineTo(b.x,b.y);
+      g.stroke();
+    }
 
+    g.strokeStyle="rgba(170,230,223,.65)";
+    g.lineWidth=3;
+    g.beginPath();
+    g.moveTo(COURT.left,COURT.cy);
+    g.lineTo(COURT.right,COURT.cy);
+    g.stroke();
 
-    // センターリッジ：横から見ると頂点を丸めた低い三角形の坂。
-    const ridgeGradient=g.createLinearGradient(0,COURT.cy-COURT.ridgeHalfWidth,0,COURT.cy+COURT.ridgeHalfWidth);
+    g.beginPath();
+    g.arc(COURT.cx,COURT.cy,70,0,Math.PI*2);
+    g.stroke();
+
+    const ridgeGradient=g.createLinearGradient(
+      0,COURT.cy-COURT.ridgeHalfWidth,
+      0,COURT.cy+COURT.ridgeHalfWidth
+    );
     ridgeGradient.addColorStop(0,"rgba(112,235,220,.08)");
     ridgeGradient.addColorStop(.48,"rgba(185,255,242,.48)");
     ridgeGradient.addColorStop(.52,"rgba(185,255,242,.48)");
     ridgeGradient.addColorStop(1,"rgba(112,235,220,.08)");
+
     g.fillStyle=ridgeGradient;
-    g.fillRect(COURT.left,COURT.cy-COURT.ridgeHalfWidth,COURT.right-COURT.left,COURT.ridgeHalfWidth*2);
+    g.fillRect(
+      COURT.left,
+      COURT.cy-COURT.ridgeHalfWidth,
+      COURT.right-COURT.left,
+      COURT.ridgeHalfWidth*2
+    );
+
     g.strokeStyle="rgba(205,255,247,.72)";
     g.lineWidth=2;
     g.beginPath();
@@ -715,31 +799,74 @@ if(isTeammateLob){
     g.lineTo(COURT.right,COURT.cy+COURT.ridgeHalfWidth);
     g.stroke();
 
-    // ゴール横カーブ壁：六角形の肩からゴールポストへつながる、緩い内向きガイド壁
-    const half=COURT.goalWidth/2;
-    g.strokeStyle="#8ce9dc";g.lineWidth=7;
-    for(const top of [true,false]){
-      const y=top?COURT.top:COURT.bottom,dir=top?1:-1;
-      for(const side of [-1,1]){
-        const startX=side<0 ? COURT.left+COURT.shoulder : COURT.right-COURT.shoulder;
-        const goalX=COURT.cx+side*half;
-        const controlX=startX+(goalX-startX)*0.56;
-        g.beginPath();g.moveTo(startX,y);
-        g.quadraticCurveTo(controlX,y+dir*COURT.curveDepth,goalX,y);
-        g.stroke();
-      }
-    }
-
-    g.strokeStyle="#fff";g.lineWidth=7;
+    g.strokeStyle="#fff";
+    g.lineWidth=7;
     for(const top of [true,false]){
       const y=top?COURT.top:COURT.bottom;
       const yd=top?y-36:y+36;
       g.beginPath();
-      g.moveTo(COURT.cx-half,y);g.lineTo(COURT.cx-half,yd);
-      g.moveTo(COURT.cx+half,y);g.lineTo(COURT.cx+half,yd);
+      g.moveTo(COURT.cx-half,y);
+      g.lineTo(COURT.cx-half,yd);
+      g.moveTo(COURT.cx+half,y);
+      g.lineTo(COURT.cx+half,yd);
       g.stroke();
     }
+
     g.restore();
+  }
+
+  function drawSpinBumpers(){
+    const now=performance.now();
+
+    for(const bumper of state.bumpers){
+      bumper.angle+=0.055*bumper.spin;
+
+      ctx.save();
+      ctx.translate(bumper.x,bumper.y);
+      ctx.rotate(bumper.angle);
+
+      const flashing=now<bumper.flashUntil;
+      ctx.shadowBlur=flashing?28:13;
+      ctx.shadowColor=flashing?"#ffffff":"#6df4e3";
+
+      ctx.fillStyle=flashing?"#eaffff":"#173e55";
+      ctx.strokeStyle="#7ff5e6";
+      ctx.lineWidth=5;
+
+      ctx.beginPath();
+      ctx.arc(0,0,bumper.r,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.strokeStyle=flashing?"#138a82":"#a6fff4";
+      ctx.lineWidth=5;
+      for(let i=0;i<8;i++){
+        const angle=(Math.PI*2*i)/8;
+        ctx.beginPath();
+        ctx.moveTo(
+          Math.cos(angle)*(bumper.r-10),
+          Math.sin(angle)*(bumper.r-10)
+        );
+        ctx.lineTo(
+          Math.cos(angle)*(bumper.r-2),
+          Math.sin(angle)*(bumper.r-2)
+        );
+        ctx.stroke();
+      }
+
+      ctx.fillStyle="#071824";
+      ctx.beginPath();
+      ctx.arc(0,0,10,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.strokeStyle=flashing?"#071824":"#72eadc";
+      ctx.lineWidth=4;
+      ctx.beginPath();
+      ctx.arc(0,0,18,0.2,Math.PI*1.45);
+      ctx.stroke();
+
+      ctx.restore();
+    }
   }
 
   function drawPlayers(){
