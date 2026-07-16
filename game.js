@@ -236,12 +236,12 @@
     state.ball.wobble=0;
     state.ball.curve=0;
     state.ball.contactLockUntil=performance.now()+150;
-    cancelCharge();
   }
 
   function releaseBall(){
     state.possessionPlayer=null;
     state.possessionTeam=null;
+    cancelCharge();
   }
 
   function pass(lob){
