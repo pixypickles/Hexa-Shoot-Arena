@@ -85,6 +85,10 @@
     bButton:{
       lastTapAt:0
     },
+    trap:{
+      pressedAt:0,
+      flashUntil:0
+    },
     chargeStep:{
       usedThisCharge:false,
       stickArmed:true
@@ -195,6 +199,8 @@
     state.step.lastDirection={x:0,y:0};
     state.chargeStep.usedThisCharge=false;
     state.chargeStep.stickArmed=true;
+    state.trap.pressedAt=0;
+    state.trap.flashUntil=0;
     state.possessionTeam=null;
     state.possessionPlayer=null;
     state.lastPossessionTeam=null;
@@ -236,7 +242,15 @@
   }
 
   function isDefending(){
-    return state.possessionTeam===1;
+    if(state.possessionTeam===1) return true;
+    if(state.possessionTeam===0) return false;
+
+    const last=state.ball.lastTouch;
+    return last!==null && teamOfPlayerIndex(last)===1;
+  }
+
+  function syncControlledRole(){
+    state.controlled=isDefending()?1:0;
   }
 
   function closestPoint(px,py,a,b){
@@ -250,11 +264,7 @@
     state.possessionPlayer=i;
     state.possessionTeam=teamOfPlayerIndex(i);
 
-    // 自チームが確保したボールは、その選手へ自動で操作を切り替える。
-    // キーパーが捕球した直後でも、A/Bでそのままパスできる。
-    if(state.possessionTeam===0){
-      state.controlled=i;
-    }
+    // 操作キャラは攻撃時FP、守備時GKに固定する。
     if(state.lastPossessionTeam!==state.possessionTeam){
       state.sixSecond=6;
       state.lastPossessionTeam=state.possessionTeam;
@@ -277,9 +287,9 @@
     cancelCharge();
   }
 
-  function pass(lob){
-    const i=state.controlled;
-    if(state.possessionPlayer!==i) return;
+  function pass(lob=false){
+    const i=state.possessionPlayer;
+    if(i===null || teamOfPlayerIndex(i)!==0) return;
     const targetI=otherMateIndex(i);
     const target=state.players[targetI];
     const b=state.ball;
@@ -429,8 +439,10 @@
       if(state.remaining<=0){ state.running=false; draw(); setTimeout(()=>location.reload(),1600); return; }
     }
 
+    syncControlledRole();
     updateCharge();
     updateHuman(dt);
+    updateHumanSupportAI(dt);
     updateCPU(dt);
     updateKeepers(dt);
     updateBall(dt,now);
@@ -503,6 +515,46 @@
       holdBall(state.controlled);
     }
     return true;
+  }
+
+  function keepPlayerInsideHex(player){
+    const half=COURT.goalWidth/2;
+
+    if(player.side==="bottom"){
+      player.y=clamp(player.y,COURT.cy+player.r,COURT.bottom-player.r);
+    }else{
+      player.y=clamp(player.y,COURT.top+player.r,COURT.cy-player.r);
+    }
+
+    let leftEdge;
+    let rightEdge;
+
+    if(player.y<=COURT.cy){
+      const t=(player.y-COURT.top)/(COURT.cy-COURT.top);
+      leftEdge=(COURT.cx-half)+(COURT.left-(COURT.cx-half))*t;
+      rightEdge=(COURT.cx+half)+(COURT.right-(COURT.cx+half))*t;
+    }else{
+      const t=(player.y-COURT.cy)/(COURT.bottom-COURT.cy);
+      leftEdge=COURT.left+((COURT.cx-half)-COURT.left)*t;
+      rightEdge=COURT.right+((COURT.cx+half)-COURT.right)*t;
+    }
+
+    player.x=clamp(player.x,leftEdge+player.r,rightEdge-player.r);
+  }
+
+  function pressJustTrap(now=performance.now()){
+    if(!isDefending()) return false;
+    state.trap.pressedAt=now;
+    state.trap.flashUntil=now+180;
+    return true;
+  }
+
+  function canJustTrap(playerIndex,speed,now){
+    if(playerIndex!==0 && playerIndex!==1) return false;
+
+    const elapsed=now-state.trap.pressedAt;
+    const windowMs=speed>=700 ? 90 : speed>=300 ? 155 : 260;
+    return elapsed>=0 && elapsed<=windowMs;
   }
 
   function currentActionDirection(player){
@@ -579,9 +631,10 @@
   }
 
   function performDivingHeader(now=performance.now()){
-    const player=state.players[state.controlled];
+    const playerIndex=isDefending()?0:state.controlled;
+    const player=state.players[playerIndex];
     if(!player || player.role!=="field") return false;
-    if(state.possessionPlayer===state.controlled) return false;
+    if(state.possessionPlayer===playerIndex) return false;
     if(isStaggered(player,now)) return false;
 
     const direction=currentActionDirection(player);
@@ -676,6 +729,7 @@
   function knockBackFieldPlayer(player,direction,distance,staggerMs){
     player.x+=direction.x*distance;
     player.y+=direction.y*distance;
+    keepPlayerInsideHex(player);
     player.staggerUntil=performance.now()+staggerMs;
     player.hitFlashUntil=performance.now()+140;
   }
@@ -714,6 +768,28 @@
     p.vx=m.x*speed;p.vy=m.y*speed;
     p.x+=p.vx*dt;p.y+=p.vy*dt;
     if(state.possessionPlayer===state.controlled) holdBall(state.controlled);
+  }
+
+  function updateHumanSupportAI(dt){
+    if(!isDefending()) return;
+
+    const f=state.players[0];
+    const b=state.ball;
+    const now=performance.now();
+
+    if(now<f.diveUntil || isStaggered(f,now)) return;
+
+    const targetX=clamp(b.x,COURT.cx-210,COURT.cx+210);
+    const targetY=COURT.cy+58;
+    const dx=targetX-f.x;
+    const dy=targetY-f.y;
+    const distance=Math.hypot(dx,dy);
+
+    if(distance>4){
+      f.x+=dx/distance*285*dt;
+      f.y+=dy/distance*285*dt;
+      keepPlayerInsideHex(f);
+    }
   }
 
   function updateCPU(dt){
@@ -830,6 +906,15 @@
 
         if(dist<blockReach && canReachHeight){
           if(now<b.contactLockUntil) break;
+
+          const contactSpeed=Math.hypot(b.vx,b.vy);
+          if(canJustTrap(i,contactSpeed,now)){
+            holdBall(i);
+            state.trap.pressedAt=0;
+            state.trap.flashUntil=now+260;
+            b.contactLockUntil=now+220;
+            break;
+          }
 
           if(i===1 && resolveKeeperJumpContact(now)){
             break;
@@ -1083,9 +1168,7 @@
 
   function constrainPlayers(){
     for(const p of state.players){
-      p.x=clamp(p.x,COURT.left+p.r,COURT.right-p.r);
-      if(p.side==="bottom") p.y=clamp(p.y,COURT.cy+p.r,COURT.bottom-p.r);
-      else p.y=clamp(p.y,COURT.top+p.r,COURT.cy-p.r);
+      keepPlayerInsideHex(p);
     }
   }
 
@@ -1366,10 +1449,25 @@
     }
 
     const defending=isDefending();
-    actionButtons.a.textContent=defending?"キャラ切替":"パス";
+    actionButtons.a.textContent=defending?"ジャストトラップ":"パス";
     if(actionButtons.b) actionButtons.b.textContent="ダッシュ";
     actionButtons.c.textContent=defending?"撃ち返し":"直線シュート";
     actionButtons.d.textContent=defending?"キーパージャンプ":"回転シュート";
+
+    if(defending && performance.now()<state.trap.flashUntil){
+      ctx.save();
+      ctx.strokeStyle="#a9fff2";
+      ctx.lineWidth=5;
+      ctx.globalAlpha=.72;
+
+      for(const i of [0,1]){
+        const p=state.players[i];
+        ctx.beginPath();
+        ctx.arc(p.x,p.y,p.r+18,0,Math.PI*2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     if(state.charge.active){
       const p=state.players[state.controlled];
@@ -1442,7 +1540,7 @@
     if(e.code==="KeyL"){
       switchHumanPlayer();
     }else if(e.code==="KeyJ"){
-      if(isDefending()) switchHumanPlayer();
+      if(isDefending()) pressJustTrap();
       else pass(false);
     }else if(e.code==="KeyB"){
       handleBButton();
@@ -1550,7 +1648,7 @@
       const a=btn.dataset.action;
 
       if(a==="passGround"){
-        if(isDefending()) switchHumanPlayer();
+        if(isDefending()) pressJustTrap();
         else pass(false);
       }
 
