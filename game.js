@@ -23,6 +23,8 @@
     bumperRadius: 34,
     bumperSideOffset: 62,
     bumperGoalOffset: 66,
+    warpGateRadius: 42,
+    warpExitInset: 62,
     ridgeHalfWidth: 22,
     ridgeVisualHeight: 15
   };
@@ -102,11 +104,15 @@
       previousY:H/2, ridgeCooldown:0,
       bounceCount:0,
       contactLockUntil:0,
-      bumperLockUntil:0
+      bumperLockUntil:0,
+      warpLockUntil:0,
+      warpFlashUntil:0,
+      lastWarpSide:0
     },
     players:[],
     walls:[],
-    bumpers:[]
+    bumpers:[],
+    warpGates:[]
   };
 
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -150,6 +156,15 @@
       {x:COURT.cx+half+side,y:COURT.bottom-goal,r,spin:1,angle:0,flashUntil:0}
     ];
   }
+
+  function makeWarpGates(){
+    const r=COURT.warpGateRadius;
+    state.warpGates=[
+      {side:-1,x:COURT.left,y:COURT.cy,r,angle:0,flashUntil:0},
+      {side:1,x:COURT.right,y:COURT.cy,r,angle:0,flashUntil:0}
+    ];
+  }
+
 
   function segment(a,b,inside){
     const tx=b.x-a.x, ty=b.y-a.y, l=Math.hypot(tx,ty)||1;
@@ -213,6 +228,7 @@
     resetBall();
     makeWalls();
     makeBumpers();
+    makeWarpGates();
   }
 
   function resetBall(){
@@ -225,7 +241,10 @@
       previousY:H/2,ridgeCooldown:0,
       bounceCount:0,
       contactLockUntil:0,
-      bumperLockUntil:0
+      bumperLockUntil:0,
+      warpLockUntil:0,
+      warpFlashUntil:0,
+      lastWarpSide:0
     });
     state.possessionTeam=null;
     state.possessionPlayer=null;
@@ -893,6 +912,7 @@
     b.vx*=damping;b.vy*=damping;
     if(Math.hypot(b.vx,b.vy)<28){ b.vx=0;b.vy=0; }
 
+    resolveWarpGates(now);
     resolveWalls();
     resolveSpinBumpers(now);
     b.stealth=Math.max(0,b.stealth-dt);
@@ -1134,10 +1154,55 @@
     }
   }
 
+  function resolveWarpGates(now){
+    const b=state.ball;
+    if(now<b.warpLockUntil) return;
+
+    for(const gate of state.warpGates){
+      const dx=b.x-gate.x;
+      const dy=b.y-gate.y;
+      if(Math.hypot(dx,dy)>gate.r+b.r) continue;
+
+      const speed=Math.max(320,Math.hypot(b.vx,b.vy));
+      const exitSide=-gate.side;
+      const exitX=exitSide<0
+        ? COURT.left+COURT.warpExitInset
+        : COURT.right-COURT.warpExitInset;
+
+      const verticalMemory=clamp(b.vy/Math.max(speed,1),-0.62,0.62);
+      const towardCenterX=exitSide<0 ? 1 : -1;
+      const exitDirection=norm(towardCenterX*0.88,verticalMemory*0.72);
+      const boostedSpeed=clamp(speed*1.25,520,1180);
+
+      b.x=exitX;
+      b.y=clamp(COURT.cy+verticalMemory*110,COURT.cy-120,COURT.cy+120);
+      b.vx=exitDirection.x*boostedSpeed;
+      b.vy=exitDirection.y*boostedSpeed;
+      b.airborne=true;
+      b.height=Math.max(7,b.height);
+      b.vz=Math.max(b.vz,170);
+      b.bounceCount=0;
+      b.warpLockUntil=now+360;
+      b.warpFlashUntil=now+180;
+      b.noPickupUntil=now+220;
+      b.contactLockUntil=now+220;
+      b.lastWarpSide=exitSide;
+
+      gate.flashUntil=now+180;
+      const exitGate=state.warpGates.find(g=>g.side===exitSide);
+      if(exitGate) exitGate.flashUntil=now+180;
+      break;
+    }
+  }
+
   function resolveWalls(){
     const b=state.ball;
     for(const w of state.walls){
       const q=closestPoint(b.x,b.y,w.a,w.b);
+      const nearLeftGate=Math.hypot(q.x-COURT.left,q.y-COURT.cy)<COURT.warpGateRadius+18;
+      const nearRightGate=Math.hypot(q.x-COURT.right,q.y-COURT.cy)<COURT.warpGateRadius+18;
+      if(nearLeftGate || nearRightGate) continue;
+
       const dx=b.x-q.x,dy=b.y-q.y,d=Math.hypot(dx,dy);
       if(d>=b.r) continue;
       const toward=b.vx*w.nx+b.vy*w.ny;
@@ -1187,6 +1252,7 @@
     ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
 
     drawCourt();
+    drawWarpGates();
     drawSpinBumpers();
     drawPlayers();
     drawBall();
@@ -1286,6 +1352,51 @@
     }
 
     g.restore();
+  }
+
+  function drawWarpGates(){
+    const now=performance.now();
+
+    for(const gate of state.warpGates){
+      gate.angle+=0.045*gate.side;
+      const flashing=now<gate.flashUntil;
+
+      ctx.save();
+      ctx.translate(gate.x,gate.y);
+      ctx.rotate(gate.angle);
+      ctx.shadowBlur=flashing?34:18;
+      ctx.shadowColor=flashing?"#ffffff":"#9b78ff";
+
+      ctx.strokeStyle=flashing?"#ffffff":"#b794ff";
+      ctx.lineWidth=7;
+      ctx.beginPath();
+      ctx.arc(0,0,gate.r,0,Math.PI*2);
+      ctx.stroke();
+
+      ctx.strokeStyle=flashing?"#79fff0":"#69d9ff";
+      ctx.lineWidth=4;
+      ctx.beginPath();
+      ctx.arc(0,0,gate.r-11,0.35,Math.PI*1.65);
+      ctx.stroke();
+
+      ctx.fillStyle="rgba(30,22,70,.72)";
+      ctx.beginPath();
+      ctx.arc(0,0,gate.r-17,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle=flashing?"#ffffff":"#8cecff";
+      for(let i=0;i<4;i++){
+        ctx.rotate(Math.PI/2);
+        ctx.beginPath();
+        ctx.moveTo(8,-5);
+        ctx.lineTo(gate.r-12,0);
+        ctx.lineTo(8,5);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
   }
 
   function drawSpinBumpers(){
