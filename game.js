@@ -74,6 +74,17 @@
       pointerId:null
     },
     lastTap:{ straight:0, curve:0 },
+    step:{
+      cooldownUntil:0,
+      lastTapAt:0,
+      lastTapDir:"",
+      flashUntil:0,
+      shotBonusUntil:0,
+      lastDirection:{x:0,y:0}
+    },
+    bButton:{
+      lastTapAt:0
+    },
     ball:{
       x:W/2,y:H/2,vx:0,vy:0,r:14,visualR:17,
       airborne:false,height:0,vz:0,
@@ -144,7 +155,12 @@
     return {
       team,role,side,x,y,vx:0,vy:0,r:25,homeX:x,homeY:y,hasBall:false,
       staggerUntil:0,
-      hitFlashUntil:0
+      hitFlashUntil:0,
+      diveUntil:0,
+      diveDir:{x:0,y:0},
+      keeperJumpUntil:0,
+      keeperJumpStartedAt:0,
+      keeperJumpDir:{x:0,y:0}
     };
   }
 
@@ -167,6 +183,12 @@
     state.charge.level=0;
     state.charge.stage=0;
     state.charge.pointerId=null;
+    state.step.cooldownUntil=0;
+    state.step.lastTapAt=0;
+    state.step.lastTapDir="";
+    state.step.flashUntil=0;
+    state.step.shotBonusUntil=0;
+    state.step.lastDirection={x:0,y:0};
     state.possessionTeam=null;
     state.possessionPlayer=null;
     state.lastPossessionTeam=null;
@@ -300,8 +322,9 @@
       lift=290;
     }
 
-    state.ball.vx=d.x*(820*shotPower);
-    state.ball.vy=d.y*(820*shotPower);
+    const stepShotBonus=performance.now()<state.step.shotBonusUntil ? 1.05 : 1;
+    state.ball.vx=d.x*(820*shotPower*stepShotBonus);
+    state.ball.vy=d.y*(820*shotPower*stepShotBonus);
     state.ball.airborne=true;
     state.ball.height=5;
     state.ball.vz=lift;
@@ -424,6 +447,181 @@
     state.sixSecond=6;
   }
 
+  function quantizeDirection(x,y){
+    if(Math.hypot(x,y)<0.28) return null;
+
+    const sx=Math.abs(x)<0.30 ? 0 : Math.sign(x);
+    const sy=Math.abs(y)<0.30 ? 0 : Math.sign(y);
+    if(sx===0 && sy===0) return null;
+
+    return {
+      x:sx,
+      y:sy,
+      key:`${sx},${sy}`
+    };
+  }
+
+  function tryDirectionTap(){
+    return false;
+  }
+
+  function performInstantStep(direction,now=performance.now()){
+    const player=state.players[state.controlled];
+    if(!player || isStaggered(player,now)) return false;
+    if(now<state.step.cooldownUntil) return false;
+
+    const n=norm(direction.x,direction.y);
+    const distance=42;
+
+    player.x+=n.x*distance;
+    player.y+=n.y*distance;
+
+    // 自陣とコート内へ戻す。保持中のボールは次のholdBall()で追従する。
+    player.x=clamp(player.x,COURT.left+player.r,COURT.right-player.r);
+    if(player.side==="bottom"){
+      player.y=clamp(player.y,COURT.cy+player.r,COURT.bottom-player.r);
+    }else{
+      player.y=clamp(player.y,COURT.top+player.r,COURT.cy-player.r);
+    }
+
+    state.step.cooldownUntil=now+800;
+    state.step.flashUntil=now+220;
+    state.step.shotBonusUntil=now+170;
+    state.step.lastDirection={x:n.x,y:n.y};
+
+    if(state.possessionPlayer===state.controlled){
+      holdBall(state.controlled);
+    }
+    return true;
+  }
+
+  function currentActionDirection(player){
+    if(Math.hypot(state.move.x,state.move.y)>0.25){
+      return norm(state.move.x,state.move.y);
+    }
+    return norm(state.ball.x-player.x,state.ball.y-player.y);
+  }
+
+  function performButtonDash(now=performance.now()){
+    const player=state.players[state.controlled];
+    if(!player || isStaggered(player,now)) return false;
+    if(now<state.step.cooldownUntil) return false;
+
+    const direction=currentActionDirection(player);
+    const distance=44;
+
+    player.x+=direction.x*distance;
+    player.y+=direction.y*distance;
+
+    player.x=clamp(player.x,COURT.left+player.r,COURT.right-player.r);
+    if(player.side==="bottom"){
+      player.y=clamp(player.y,COURT.cy+player.r,COURT.bottom-player.r);
+    }else{
+      player.y=clamp(player.y,COURT.top+player.r,COURT.cy-player.r);
+    }
+
+    state.step.cooldownUntil=now+760;
+    state.step.flashUntil=now+220;
+    state.step.shotBonusUntil=now+170;
+    state.step.lastDirection={...direction};
+
+    if(state.possessionPlayer===state.controlled){
+      holdBall(state.controlled);
+    }
+    return true;
+  }
+
+  function performDivingHeader(now=performance.now()){
+    const player=state.players[state.controlled];
+    if(!player || player.role!=="field") return false;
+    if(state.possessionPlayer===state.controlled) return false;
+    if(isStaggered(player,now)) return false;
+
+    const direction=currentActionDirection(player);
+    player.diveUntil=now+260;
+    player.diveDir=direction;
+    player.hitFlashUntil=now+120;
+    return true;
+  }
+
+  function handleBButton(now=performance.now()){
+    const quickSecondTap=now-state.bButton.lastTapAt<=320;
+    state.bButton.lastTapAt=now;
+
+    if(quickSecondTap && state.possessionPlayer!==state.controlled){
+      state.bButton.lastTapAt=0;
+      if(performDivingHeader(now)) return;
+    }
+    performButtonDash(now);
+  }
+
+  function tryHitBack(now=performance.now()){
+    const player=state.players[state.controlled];
+    const b=state.ball;
+    if(!player || state.possessionTeam!==1) return false;
+
+    const distance=Math.hypot(b.x-player.x,b.y-player.y);
+    if(distance>player.r+b.r+52 || b.height>54) return false;
+
+    const targetY=player.side==="bottom"?COURT.top-25:COURT.bottom+25;
+    const direction=norm(COURT.cx-b.x,targetY-b.y);
+
+    releaseBall();
+    b.vx=direction.x*720;
+    b.vy=direction.y*720;
+    b.airborne=true;
+    b.height=Math.max(5,b.height);
+    b.vz=150;
+    b.noPickupUntil=now+260;
+    b.contactLockUntil=now+260;
+    b.lastTouch=state.controlled;
+    return true;
+  }
+
+  function startKeeperJump(now=performance.now()){
+    if(state.possessionTeam!==1) return false;
+
+    const keeper=state.players[1];
+    const direction=norm(state.ball.x-keeper.x,state.ball.y-keeper.y);
+
+    keeper.keeperJumpUntil=now+300;
+    keeper.keeperJumpStartedAt=now;
+    keeper.keeperJumpDir=direction;
+    state.controlled=1;
+    return true;
+  }
+
+  function resolveKeeperJumpContact(now){
+    const keeper=state.players[1];
+    const b=state.ball;
+    if(now>=keeper.keeperJumpUntil) return false;
+
+    const distance=Math.hypot(b.x-keeper.x,b.y-keeper.y);
+    if(distance>keeper.r+b.r+26 || b.height>62) return false;
+
+    const elapsed=now-keeper.keeperJumpStartedAt;
+    const justCatch=elapsed<=145;
+
+    if(justCatch){
+      holdBall(1);
+    }else{
+      const targetY=COURT.top-30;
+      const direction=norm(COURT.cx-b.x,targetY-b.y);
+      releaseBall();
+      b.vx=direction.x*650;
+      b.vy=direction.y*650;
+      b.airborne=true;
+      b.height=Math.max(6,b.height);
+      b.vz=175;
+      b.noPickupUntil=now+300;
+      b.contactLockUntil=now+300;
+      b.lastTouch=1;
+    }
+
+    keeper.keeperJumpUntil=0;
+    return true;
+  }
+
   function isStaggered(player,now=performance.now()){
     return now<player.staggerUntil;
   }
@@ -445,10 +643,23 @@
 
     const p=state.players[state.controlled];
     const m=state.move;
+    const now=performance.now();
 
-    if(isStaggered(p)){
+    if(isStaggered(p,now)){
       p.vx=0;
       p.vy=0;
+      return;
+    }
+
+    if(p.diveUntil>now){
+      p.x+=p.diveDir.x*520*dt;
+      p.y+=p.diveDir.y*520*dt;
+      return;
+    }
+
+    if(p.keeperJumpUntil>now){
+      p.x+=p.keeperJumpDir.x*640*dt;
+      p.y+=p.keeperJumpDir.y*640*dt;
       return;
     }
 
@@ -572,6 +783,25 @@
 
         if(dist<blockReach && canReachHeight){
           if(now<b.contactLockUntil) break;
+
+          if(i===1 && resolveKeeperJumpContact(now)){
+            break;
+          }
+
+          if(p.role==="field" && now<p.diveUntil){
+            const targetY=p.side==="bottom"?COURT.top-24:COURT.bottom+24;
+            const direction=norm(COURT.cx-b.x,targetY-b.y);
+            b.vx=direction.x*780;
+            b.vy=direction.y*780;
+            b.airborne=true;
+            b.height=Math.max(7,b.height*0.35);
+            b.vz=130;
+            b.noPickupUntil=now+300;
+            b.contactLockUntil=now+300;
+            b.lastTouch=i;
+            p.diveUntil=0;
+            break;
+          }
 
           const lastTouchTeam =
             b.lastTouch === null ? null : teamOfPlayerIndex(b.lastTouch);
@@ -987,8 +1217,48 @@
       const p=state.players[i],t=teams[p.team];
       ctx.save();ctx.translate(p.x,p.y);
 
-      if(isStaggered(p)){
-        ctx.rotate(Math.sin(performance.now()/45)*0.12);
+      if(i===state.controlled){
+        const now=performance.now();
+
+        if(now<state.step.flashUntil){
+          ctx.save();
+          ctx.globalAlpha=.55;
+          ctx.strokeStyle="#ffffff";
+          ctx.lineWidth=7;
+          ctx.beginPath();
+          ctx.arc(
+            -state.step.lastDirection.x*18,
+            -state.step.lastDirection.y*18,
+            p.r+16,
+            0,
+            Math.PI*2
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        if(now<state.step.cooldownUntil){
+          const remain=clamp((state.step.cooldownUntil-now)/800,0,1);
+          ctx.save();
+          ctx.strokeStyle="rgba(130,245,232,.45)";
+          ctx.lineWidth=3;
+          ctx.beginPath();
+          ctx.arc(0,0,p.r+30,-Math.PI/2,-Math.PI/2+Math.PI*2*(1-remain));
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      const now=performance.now();
+
+      if(p.diveUntil>now){
+        ctx.rotate(Math.atan2(p.diveDir.y,p.diveDir.x));
+        ctx.scale(1.55,0.68);
+      }else if(p.keeperJumpUntil>now){
+        ctx.rotate(Math.atan2(p.keeperJumpDir.y,p.keeperJumpDir.x));
+        ctx.scale(1.45,0.74);
+      }else if(isStaggered(p,now)){
+        ctx.rotate(Math.sin(now/45)*0.12);
         ctx.scale(1.14,0.82);
       }
 
@@ -1049,10 +1319,10 @@
     }
 
     const defending=isDefending();
-    actionButtons.a.textContent=defending?"キャラ切替":"ゴロパス";
-    actionButtons.b.textContent=defending?"撃ち返し":"浮きパス";
-    actionButtons.c.textContent=defending?"パンチ":"直線シュート";
-    actionButtons.d.textContent=defending?"キャッチ":"回転シュート";
+    actionButtons.a.textContent=defending?"キャラ切替":"パス";
+    actionButtons.b.textContent="ダッシュ";
+    actionButtons.c.textContent=defending?"撃ち返し":"直線シュート";
+    actionButtons.d.textContent=defending?"キーパージャンプ":"回転シュート";
 
     if(state.charge.active){
       const p=state.players[state.controlled];
@@ -1089,32 +1359,52 @@
     }
   }
 
+  function keyboardDirectionFromCode(code){
+    if(code==="ArrowLeft") return {x:-1,y:0};
+    if(code==="ArrowRight") return {x:1,y:0};
+    if(code==="ArrowUp") return {x:0,y:-1};
+    if(code==="ArrowDown") return {x:0,y:1};
+    return null;
+  }
+
   // keyboard
   addEventListener("keydown",e=>{
     if(state.keys[e.code]) return;
     state.keys[e.code]=true;
 
+    const stepDirection=keyboardDirectionFromCode(e.code);
+    if(stepDirection){
+      tryDirectionTap(stepDirection.x,stepDirection.y);
+    }
+
     if(e.code==="KeyL"){
       switchHumanPlayer();
     }else if(e.code==="KeyJ"){
-      pass(false);
+      if(isDefending()) switchHumanPlayer();
+      else pass(false);
+    }else if(e.code==="KeyB"){
+      handleBButton();
     }else if(e.code==="KeyK"){
-      beginCharge("straight");
+      if(isDefending()) tryHitBack();
+      else beginCharge("straight");
     }else if(e.code==="KeyI"){
-      beginCharge("curve");
+      if(isDefending()) startKeeperJump();
+      else beginCharge("curve");
     }
   });
 
   addEventListener("keyup",e=>{
     state.keys[e.code]=false;
-    if(e.code==="KeyK") releaseCharge("straight");
-    if(e.code==="KeyI") releaseCharge("curve");
+    if(e.code==="KeyK" && !isDefending()) releaseCharge("straight");
+    if(e.code==="KeyI" && !isDefending()) releaseCharge("curve");
   });
 
   function updateKeyboardMove(){
     let x=0,y=0;
-    if(state.keys.KeyA)x--;if(state.keys.KeyD)x++;
-    if(state.keys.KeyW)y--;if(state.keys.KeyS)y++;
+    if(state.keys.KeyA || state.keys.ArrowLeft)x--;
+    if(state.keys.KeyD || state.keys.ArrowRight)x++;
+    if(state.keys.KeyW || state.keys.ArrowUp)y--;
+    if(state.keys.KeyS || state.keys.ArrowDown)y++;
     const n=norm(x,y);
     state.keyboardMove=(x||y)?n:{x:0,y:0};
     requestAnimationFrame(updateKeyboardMove);
@@ -1124,6 +1414,10 @@
   // virtual stick
   const stick=document.getElementById("stick"), knob=document.getElementById("stickKnob");
   let stickPointer=null;
+  let stickStartedAt=0;
+  let stickPeak={x:0,y:0};
+  let stickWasPushed=false;
+  let stickReturnedCenter=true;
   function setStick(e){
     const r=stick.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
     let dx=e.clientX-cx,dy=e.clientY-cy;
@@ -1131,10 +1425,30 @@
     if(l>max){dx=dx/l*max;dy=dy/l*max;}
     knob.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;
     state.touchMove={x:dx/max,y:dy/max};
+
+    const strength=Math.hypot(state.touchMove.x,state.touchMove.y);
+
+    if(strength>Math.hypot(stickPeak.x,stickPeak.y)){
+      stickPeak={...state.touchMove};
+    }
+
+    // スマホでは「倒す→中央へ戻す→同方向へもう一度倒す」でステップ。
+    if(strength<0.22){
+      stickReturnedCenter=true;
+      stickWasPushed=false;
+    }else if(strength>=0.62 && (!stickWasPushed || stickReturnedCenter)){
+      tryDirectionTap(state.touchMove.x,state.touchMove.y,performance.now());
+      stickWasPushed=true;
+      stickReturnedCenter=false;
+    }
   }
   stick.addEventListener("pointerdown",e=>{
     e.preventDefault();
     stickPointer=e.pointerId;
+    stickStartedAt=performance.now();
+    stickPeak={x:0,y:0};
+    stickWasPushed=false;
+    stickReturnedCenter=true;
     stick.setPointerCapture(e.pointerId);
     setStick(e);
   });
@@ -1146,7 +1460,12 @@
   });
   function endStick(e){
     if(e.pointerId!==stickPointer)return;
-    stickPointer=null;state.touchMove={x:0,y:0};
+
+    stickPointer=null;
+    state.touchMove={x:0,y:0};
+    stickPeak={x:0,y:0};
+    stickWasPushed=false;
+    stickReturnedCenter=true;
     knob.style.transform="translate(-50%,-50%)";
   }
   stick.addEventListener("pointerup",endStick);stick.addEventListener("pointercancel",endStick);
@@ -1161,15 +1480,26 @@
         if(isDefending()) switchHumanPlayer();
         else pass(false);
       }
-      if(a==="passLob")pass(true);
-      if(a==="shootStraight")beginCharge("straight",e.pointerId);
-      if(a==="shootCurve")beginCharge("curve",e.pointerId);
+
+      if(a==="passLob"){
+        handleBButton();
+      }
+
+      if(a==="shootStraight"){
+        if(isDefending()) tryHitBack();
+        else beginCharge("straight",e.pointerId);
+      }
+
+      if(a==="shootCurve"){
+        if(isDefending()) startKeeperJump();
+        else beginCharge("curve",e.pointerId);
+      }
     });
 
     btn.addEventListener("pointerup",e=>{
       const a=btn.dataset.action;
-      if(a==="shootStraight")releaseCharge("straight");
-      if(a==="shootCurve")releaseCharge("curve");
+      if(a==="shootStraight" && !isDefending())releaseCharge("straight");
+      if(a==="shootCurve" && !isDefending())releaseCharge("curve");
     });
 
     btn.addEventListener("pointercancel",()=>{
