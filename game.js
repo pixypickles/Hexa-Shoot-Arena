@@ -21,7 +21,9 @@
     shoulder: 170,
     goalWidth: 250,
     curveDepth: 28,
-    curveSegments: 8
+    curveSegments: 8,
+    ridgeHalfWidth: 22,
+    ridgeVisualHeight: 15
   };
 
   const teams = [
@@ -59,7 +61,8 @@
       x:W/2,y:H/2,vx:0,vy:0,r:14,visualR:17,
       airborne:false,height:0,vz:0,
       noPickupUntil:0, lastTouch:null,
-      curve:0, stealth:0, breakShot:false
+      curve:0, stealth:0, breakShot:false,
+      previousY:H/2, ridgeCooldown:0
     },
     players:[],
     walls:[]
@@ -156,7 +159,8 @@
       x:W/2,y:H/2,vx:0,vy:0,
       airborne:false,height:0,vz:0,
       noPickupUntil:performance.now()+500,
-      lastTouch:null,curve:0,stealth:0,breakShot:false
+      lastTouch:null,curve:0,stealth:0,breakShot:false,
+      previousY:H/2,ridgeCooldown:0
     });
     state.possessionTeam=null;
     state.possessionPlayer=null;
@@ -178,6 +182,12 @@
   function holdBall(i){
     state.possessionPlayer=i;
     state.possessionTeam=teamOfPlayerIndex(i);
+
+    // 自チームが確保したボールは、その選手へ自動で操作を切り替える。
+    // キーパーが捕球した直後でも、A/Bでそのままパスできる。
+    if(state.possessionTeam===0){
+      state.controlled=i;
+    }
     if(state.lastPossessionTeam!==state.possessionTeam){
       state.sixSecond=6;
       state.lastPossessionTeam=state.possessionTeam;
@@ -325,7 +335,13 @@
 
   function updateBall(dt,now){
     const b=state.ball;
-    if(state.possessionPlayer!==null) return;
+    if(state.possessionPlayer!==null){
+      b.previousY=b.y;
+      return;
+    }
+
+    b.ridgeCooldown=Math.max(0,b.ridgeCooldown-dt);
+    const beforeMoveY=b.y;
 
     if(b.curve!==0){
       const speed=Math.hypot(b.vx,b.vy);
@@ -347,6 +363,8 @@
     }
 
     b.x+=b.vx*dt;b.y+=b.vy*dt;
+    resolveCenterRidge(beforeMoveY);
+
     const damping=Math.pow(0.31,dt);
     b.vx*=damping;b.vy*=damping;
     if(Math.hypot(b.vx,b.vy)<28){ b.vx=0;b.vy=0; }
@@ -381,6 +399,40 @@
           break;
         }
       }
+    }
+
+    b.previousY=b.y;
+  }
+
+  function resolveCenterRidge(previousY){
+    const b=state.ball;
+    const ridgeTop=COURT.cy-COURT.ridgeHalfWidth;
+    const ridgeBottom=COURT.cy+COURT.ridgeHalfWidth;
+    const crossedFromBottom=previousY>ridgeBottom && b.y<=ridgeBottom;
+    const crossedFromTop=previousY<ridgeTop && b.y>=ridgeTop;
+    const insideRidge=b.y>=ridgeTop && b.y<=ridgeBottom;
+
+    if(!insideRidge || b.ridgeCooldown>0) return;
+
+    const speed=Math.hypot(b.vx,b.vy);
+    if(speed<18) return;
+
+    // 十分高い浮き球は坂をそのまま越える。
+    if(b.airborne && b.height>COURT.ridgeVisualHeight+8) return;
+
+    if(crossedFromBottom || crossedFromTop || (!b.airborne && b.height<4)){
+      const travelDirection=Math.sign(b.vy) || (b.y<COURT.cy ? 1 : -1);
+
+      // 低い球は膝ほどの坂に当たり、前へ抜けながら上へ跳ねる。
+      b.airborne=true;
+      b.height=Math.max(b.height,5);
+      b.vz=clamp(150+speed*0.30,190,390);
+      b.vx*=0.88;
+      b.vy=travelDirection*Math.max(Math.abs(b.vy)*0.78,115);
+
+      // 頂点で止まらないよう進行方向側へ押し出す。
+      b.y=COURT.cy+travelDirection*(COURT.ridgeHalfWidth+1);
+      b.ridgeCooldown=0.28;
     }
   }
 
@@ -469,6 +521,24 @@
     g.strokeStyle="rgba(170,230,223,.65)";g.lineWidth=3;
     g.beginPath();g.moveTo(COURT.left,COURT.cy);g.lineTo(COURT.right,COURT.cy);g.stroke();
     g.beginPath();g.arc(COURT.cx,COURT.cy,70,0,Math.PI*2);g.stroke();
+
+
+    // センターリッジ：横から見ると頂点を丸めた低い三角形の坂。
+    const ridgeGradient=g.createLinearGradient(0,COURT.cy-COURT.ridgeHalfWidth,0,COURT.cy+COURT.ridgeHalfWidth);
+    ridgeGradient.addColorStop(0,"rgba(112,235,220,.08)");
+    ridgeGradient.addColorStop(.48,"rgba(185,255,242,.48)");
+    ridgeGradient.addColorStop(.52,"rgba(185,255,242,.48)");
+    ridgeGradient.addColorStop(1,"rgba(112,235,220,.08)");
+    g.fillStyle=ridgeGradient;
+    g.fillRect(COURT.left,COURT.cy-COURT.ridgeHalfWidth,COURT.right-COURT.left,COURT.ridgeHalfWidth*2);
+    g.strokeStyle="rgba(205,255,247,.72)";
+    g.lineWidth=2;
+    g.beginPath();
+    g.moveTo(COURT.left,COURT.cy-COURT.ridgeHalfWidth);
+    g.lineTo(COURT.right,COURT.cy-COURT.ridgeHalfWidth);
+    g.moveTo(COURT.left,COURT.cy+COURT.ridgeHalfWidth);
+    g.lineTo(COURT.right,COURT.cy+COURT.ridgeHalfWidth);
+    g.stroke();
 
     // ゴール横カーブ壁：六角形の肩からゴールポストへつながる、緩い内向きガイド壁
     const half=COURT.goalWidth/2;
