@@ -1320,7 +1320,7 @@
 
     const defending=isDefending();
     actionButtons.a.textContent=defending?"キャラ切替":"パス";
-    actionButtons.b.textContent="ダッシュ";
+    if(actionButtons.b) actionButtons.b.textContent="ダッシュ";
     actionButtons.c.textContent=defending?"撃ち返し":"直線シュート";
     actionButtons.d.textContent=defending?"キーパージャンプ":"回転シュート";
 
@@ -1481,7 +1481,7 @@
         else pass(false);
       }
 
-      if(a==="passLob"){
+      if(a==="dash" || a==="passLob"){
         handleBButton();
       }
 
