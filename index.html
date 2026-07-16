@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <title>Hexa Shoot Arena</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app">
+    <section id="menu" class="panel">
+      <h1>HEXA SHOOT ARENA</h1>
+      <p class="subtitle">六角形アリーナの2対2シュートアクション</p>
+
+      <div class="settings">
+        <label>PLAYER TEAM
+          <select id="playerTeam"></select>
+        </label>
+        <label>CPU TEAM
+          <select id="cpuTeam"></select>
+        </label>
+        <label>DIFFICULTY
+          <select id="difficulty">
+            <option value="easy">EASY</option>
+            <option value="normal" selected>NORMAL</option>
+            <option value="hard">HARD</option>
+          </select>
+        </label>
+        <label>MATCH TIME
+          <select id="matchTime">
+            <option value="60" selected>1 MIN</option>
+            <option value="120">2 MIN</option>
+          </select>
+        </label>
+        <label>SPECIAL SHOT
+          <select id="specialShot">
+            <option value="hook">HOOK SHOT</option>
+            <option value="side">SIDE NET CURVE</option>
+            <option value="break">BREAK SHOT</option>
+            <option value="stealth">STEALTH SHOT</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="startBtn" class="primary">START MATCH</button>
+      <p class="help">PC: WASD移動 / Jパス / Kシュート / L切替</p>
+    </section>
+
+    <section id="gameWrap" class="hidden">
+      <canvas id="game" width="1280" height="720"></canvas>
+
+      <div id="stick" class="stick">
+        <div id="stickKnob" class="stick-knob"></div>
+      </div>
+
+      <div class="buttons">
+        <button class="action a" data-action="passGround"><b>A</b><span>ゴロパス</span></button>
+        <button class="action b" data-action="passLob"><b>B</b><span>浮きパス</span></button>
+        <button class="action c" data-action="shootStraight"><b>C</b><span>直線シュート</span></button>
+        <button class="action d" data-action="shootCurve"><b>D</b><span>回転シュート</span></button>
+      </div>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
