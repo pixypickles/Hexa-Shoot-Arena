@@ -70,6 +70,7 @@
       type:null,
       startedAt:0,
       level:0,
+      stage:0,
       pointerId:null
     },
     lastTap:{ straight:0, curve:0 },
@@ -164,6 +165,7 @@
     state.charge.type=null;
     state.charge.startedAt=0;
     state.charge.level=0;
+    state.charge.stage=0;
     state.charge.pointerId=null;
     state.possessionTeam=null;
     state.possessionPlayer=null;
@@ -266,56 +268,76 @@
     state.controlled=targetI;
   }
 
-  function shoot(curved=false, power=1, forcedHalf=false){
+  function shoot(curved=false, power=1, chargeStage=0){
     const i=state.controlled;
     if(state.possessionPlayer!==i) return;
 
     const p=state.players[i];
     const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
-    const aimX=COURT.cx + state.move.x*155;
-    const d=norm(aimX-state.ball.x,targetY-state.ball.y);
 
+    // スティック方向をそのまま8方向の発射方向として使う。
+    let aimX=COURT.cx + state.move.x*260;
+    let aimY=targetY;
+
+    // 真横入力が強い時は、ワープゲート狙い用に真横へ撃てる。
+    if(Math.abs(state.move.x)>0.72 && Math.abs(state.move.y)<0.42){
+      aimX=p.x+Math.sign(state.move.x)*900;
+      aimY=p.y;
+    }
+
+    const d=norm(aimX-state.ball.x,aimY-state.ball.y);
     releaseBall();
 
-    const shotPower=forcedHalf ? 1.22 : power;
+    let shotPower=1;
+    let lift=165;
+    let curveAmount=0;
+
+    if(chargeStage===1){
+      shotPower=1.34;
+      lift=225;
+    }else if(chargeStage===2){
+      shotPower=1.62;
+      lift=290;
+    }
+
     state.ball.vx=d.x*(820*shotPower);
     state.ball.vy=d.y*(820*shotPower);
     state.ball.airborne=true;
     state.ball.height=5;
-    state.ball.vz=145+65*shotPower;
+    state.ball.vz=lift;
     state.ball.bounceCount=0;
-    state.ball.curve=curved
-      ? (state.move.x===0 ? 0.18 : Math.sign(state.move.x)*0.18) * shotPower
-      : 0;
 
-    // フルチャージのストレートだけブレ球。
-    state.ball.wobble=(!curved && shotPower>=1.5) ? 1 : 0;
+    if(curved){
+      curveAmount=(state.move.x===0 ? 0.18 : Math.sign(state.move.x)*0.18);
+      if(chargeStage===1) curveAmount*=1.45;
+      if(chargeStage===2) curveAmount*=2.05;
+    }
+    state.ball.curve=curveAmount;
+
+    // 1段階ストレートは軽いブレ、2段階は必殺級の強いブレ。
+    if(!curved){
+      state.ball.wobble=chargeStage===2 ? 1.5 : chargeStage===1 ? 0.55 : 0;
+    }else{
+      state.ball.wobble=0;
+    }
     state.ball.wobblePhase=0;
 
-    state.ball.noPickupUntil=performance.now()+210;
-    state.ball.contactLockUntil=performance.now()+210;
+    // 2段階は今後の必殺シュート差し替え用フラグ。
+    state.ball.breakShot=chargeStage===2;
+
+    state.ball.noPickupUntil=performance.now()+240;
+    state.ball.contactLockUntil=performance.now()+240;
     state.ball.lastTouch=i;
   }
 
   function beginCharge(type, pointerId=null){
-    const curved=type==="curve";
-    const now=performance.now();
-
-    // 素早い2回押しでハーフチャージ。
-    const last=state.lastTap[type] || 0;
-    if(now-last<=280){
-      state.lastTap[type]=0;
-      shoot(curved,1.22,true);
-      return;
-    }
-
-    state.lastTap[type]=now;
     if(state.possessionPlayer!==state.controlled) return;
 
     state.charge.active=true;
     state.charge.type=type;
-    state.charge.startedAt=now;
+    state.charge.startedAt=performance.now();
     state.charge.level=0;
+    state.charge.stage=0;
     state.charge.pointerId=pointerId;
   }
 
@@ -325,22 +347,19 @@
     const held=(performance.now()-state.charge.startedAt)/1000;
     const curved=type==="curve";
 
-    // 0.18秒未満は通常、0.18〜0.48秒はハーフ、0.48秒以上はフル。
-    let power=1;
-    if(held>=0.48) power=1.55;
-    else if(held>=0.18) power=1.24;
+    let stage=0;
+    if(held>=0.90) stage=2;
+    else if(held>=0.35) stage=1;
 
-    shoot(curved,power,false);
-    state.charge.active=false;
-    state.charge.type=null;
-    state.charge.level=0;
-    state.charge.pointerId=null;
+    shoot(curved,1,stage);
+    cancelCharge();
   }
 
   function cancelCharge(){
     state.charge.active=false;
     state.charge.type=null;
     state.charge.level=0;
+    state.charge.stage=0;
     state.charge.pointerId=null;
   }
 
@@ -395,7 +414,8 @@
     }
 
     const held=(performance.now()-state.charge.startedAt)/1000;
-    state.charge.level=clamp(held/0.48,0,1);
+    state.charge.level=clamp(held/0.90,0,1);
+    state.charge.stage=held>=0.90 ? 2 : held>=0.35 ? 1 : 0;
   }
 
   function turnover(team){
@@ -432,7 +452,7 @@
       return;
     }
 
-    const speed=350;
+    const speed=state.charge.active ? 270 : 350;
     p.vx=m.x*speed;p.vy=m.y*speed;
     p.x+=p.vx*dt;p.y+=p.vy*dt;
     if(state.possessionPlayer===state.controlled) holdBall(state.controlled);
@@ -1027,20 +1047,37 @@
     actionButtons.d.textContent=defending?"キャッチ":"回転シュート";
 
     if(state.charge.active){
-      const x=W/2-125, y=H-34, width=250, height=14;
-      ctx.fillStyle="rgba(3,11,20,.76)";
-      ctx.fillRect(x,y,width,height);
-      ctx.strokeStyle="#d5fff8";
-      ctx.lineWidth=2;
-      ctx.strokeRect(x,y,width,height);
+      const p=state.players[state.controlled];
+      const pulse=1+Math.sin(performance.now()/70)*0.05;
 
-      const level=clamp(state.charge.level,0,1);
-      ctx.fillStyle=level>=1?"#ffdb6e":level>=0.38?"#72f0dc":"#69bde8";
-      ctx.fillRect(x+2,y+2,(width-4)*level,height-4);
+      ctx.save();
+      ctx.translate(p.x,p.y);
+      ctx.scale(pulse,pulse);
+      ctx.lineCap="round";
 
-      ctx.fillStyle="#ffffff";
-      ctx.font="800 14px system-ui";
-      ctx.fillText(state.charge.type==="curve"?"CURVE CHARGE":"STRAIGHT CHARGE",W/2,y-7);
+      // 1段階リング
+      ctx.strokeStyle=state.charge.stage>=1?"#ffe06e":"rgba(255,255,255,.35)";
+      ctx.lineWidth=6;
+      ctx.beginPath();
+      ctx.arc(0,0,p.r+13,-Math.PI/2,-Math.PI/2+Math.PI*2*clamp(state.charge.level/0.39,0,1));
+      ctx.stroke();
+
+      // 2段階リング
+      const secondProgress=clamp((state.charge.level-0.39)/0.61,0,1);
+      ctx.strokeStyle=state.charge.stage>=2?"#ff6b6b":"rgba(255,120,120,.35)";
+      ctx.lineWidth=7;
+      ctx.beginPath();
+      ctx.arc(0,0,p.r+22,-Math.PI/2,-Math.PI/2+Math.PI*2*secondProgress);
+      ctx.stroke();
+
+      if(state.charge.stage===2){
+        ctx.fillStyle="#ffffff";
+        ctx.font="900 15px system-ui";
+        ctx.textAlign="center";
+        ctx.fillText("SPECIAL",0,-p.r-31);
+      }
+
+      ctx.restore();
     }
   }
 
@@ -1128,7 +1165,9 @@
     });
 
     btn.addEventListener("pointercancel",()=>{
-      cancelCharge();
+      if(state.charge.active){
+        releaseCharge(state.charge.type);
+      }
     });
   });
 
