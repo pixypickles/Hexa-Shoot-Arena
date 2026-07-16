@@ -20,7 +20,7 @@
     left: 170, right: 1110,
     shoulder: 170,
     goalWidth: 250,
-    curveDepth: 48,
+    curveDepth: 28,
     curveSegments: 8
   };
 
@@ -48,6 +48,8 @@
     settings:null,
     controlled:0,
     keys:{},
+    keyboardMove:{x:0,y:0},
+    touchMove:{x:0,y:0},
     move:{x:0,y:0},
     sixSecond:6,
     possessionTeam:null,
@@ -91,14 +93,15 @@
     const half=COURT.goalWidth/2;
     function addCurve(top,left){
       const y=top?COURT.top:COURT.bottom;
-      const outerX=COURT.cx+(left?-(half+125):(half+125));
+      const startX=left ? COURT.left+COURT.shoulder : COURT.right-COURT.shoulder;
       const goalX=COURT.cx+(left?-half:half);
       const bendY=y+(top?COURT.curveDepth:-COURT.curveDepth);
-      let prev={x:outerX,y};
+      const controlX=startX+(goalX-startX)*0.56;
+      let prev={x:startX,y};
       for(let i=1;i<=COURT.curveSegments;i++){
         const t=i/COURT.curveSegments,u=1-t;
         const p={
-          x:u*u*outerX+2*u*t*((outerX+goalX)/2)+t*t*goalX,
+          x:u*u*startX+2*u*t*controlX+t*t*goalX,
           y:u*u*y+2*u*t*bendY+t*t*y
         };
         walls.push(segment(prev,p,c));
@@ -275,6 +278,13 @@
   }
 
   function updateHuman(dt){
+    const combinedX=state.keyboardMove.x+state.touchMove.x;
+    const combinedY=state.keyboardMove.y+state.touchMove.y;
+    const combinedLength=Math.hypot(combinedX,combinedY);
+    state.move=combinedLength>1
+      ? {x:combinedX/combinedLength,y:combinedY/combinedLength}
+      : {x:combinedX,y:combinedY};
+
     const p=state.players[state.controlled];
     const m=state.move;
     const speed=350;
@@ -460,15 +470,17 @@
     g.beginPath();g.moveTo(COURT.left,COURT.cy);g.lineTo(COURT.right,COURT.cy);g.stroke();
     g.beginPath();g.arc(COURT.cx,COURT.cy,70,0,Math.PI*2);g.stroke();
 
-    // ゴール横カーブ壁
+    // ゴール横カーブ壁：六角形の肩からゴールポストへつながる、緩い内向きガイド壁
     const half=COURT.goalWidth/2;
     g.strokeStyle="#8ce9dc";g.lineWidth=7;
     for(const top of [true,false]){
       const y=top?COURT.top:COURT.bottom,dir=top?1:-1;
       for(const side of [-1,1]){
-        const outer=COURT.cx+side*(half+125),goal=COURT.cx+side*half;
-        g.beginPath();g.moveTo(outer,y);
-        g.quadraticCurveTo((outer+goal)/2,y+dir*COURT.curveDepth,goal,y);
+        const startX=side<0 ? COURT.left+COURT.shoulder : COURT.right-COURT.shoulder;
+        const goalX=COURT.cx+side*half;
+        const controlX=startX+(goalX-startX)*0.56;
+        g.beginPath();g.moveTo(startX,y);
+        g.quadraticCurveTo(controlX,y+dir*COURT.curveDepth,goalX,y);
         g.stroke();
       }
     }
@@ -554,7 +566,7 @@
     if(state.keys.KeyA)x--;if(state.keys.KeyD)x++;
     if(state.keys.KeyW)y--;if(state.keys.KeyS)y++;
     const n=norm(x,y);
-    state.move=(x||y)?n:{x:0,y:0};
+    state.keyboardMove=(x||y)?n:{x:0,y:0};
     requestAnimationFrame(updateKeyboardMove);
   }
   updateKeyboardMove();
@@ -568,13 +580,23 @@
     const max=r.width*.35,l=Math.hypot(dx,dy);
     if(l>max){dx=dx/l*max;dy=dy/l*max;}
     knob.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;
-    state.move={x:dx/max,y:dy/max};
+    state.touchMove={x:dx/max,y:dy/max};
   }
-  stick.addEventListener("pointerdown",e=>{stickPointer=e.pointerId;stick.setPointerCapture(e.pointerId);setStick(e);});
-  stick.addEventListener("pointermove",e=>{if(e.pointerId===stickPointer)setStick(e);});
+  stick.addEventListener("pointerdown",e=>{
+    e.preventDefault();
+    stickPointer=e.pointerId;
+    stick.setPointerCapture(e.pointerId);
+    setStick(e);
+  });
+  stick.addEventListener("pointermove",e=>{
+    if(e.pointerId===stickPointer){
+      e.preventDefault();
+      setStick(e);
+    }
+  });
   function endStick(e){
     if(e.pointerId!==stickPointer)return;
-    stickPointer=null;state.move={x:0,y:0};
+    stickPointer=null;state.touchMove={x:0,y:0};
     knob.style.transform="translate(-50%,-50%)";
   }
   stick.addEventListener("pointerup",endStick);stick.addEventListener("pointercancel",endStick);

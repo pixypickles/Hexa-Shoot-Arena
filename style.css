@@ -82,6 +82,12 @@ canvas {
   background:#07111f;
 }
 
+#gameWrap, .stick, .stick-knob, .buttons, .action {
+  user-select:none;
+  -webkit-user-select:none;
+  overscroll-behavior:none;
+}
+
 .stick {
   position:absolute;
   left:max(24px,env(safe-area-inset-left));
