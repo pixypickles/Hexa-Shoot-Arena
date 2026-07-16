@@ -42,6 +42,13 @@
   }
   cpuTeamSelect.value = "1";
 
+  const actionButtons = {
+    a: document.querySelector('.action.a span'),
+    b: document.querySelector('.action.b span'),
+    c: document.querySelector('.action.c span'),
+    d: document.querySelector('.action.d span')
+  };
+
   const state = {
     running:false,
     last:0,
@@ -62,7 +69,8 @@
       airborne:false,height:0,vz:0,
       noPickupUntil:0, lastTouch:null,
       curve:0, stealth:0, breakShot:false,
-      previousY:H/2, ridgeCooldown:0
+      previousY:H/2, ridgeCooldown:0,
+      bounceCount:0
     },
     players:[],
     walls:[]
@@ -160,7 +168,8 @@
       airborne:false,height:0,vz:0,
       noPickupUntil:performance.now()+500,
       lastTouch:null,curve:0,stealth:0,breakShot:false,
-      previousY:H/2,ridgeCooldown:0
+      previousY:H/2,ridgeCooldown:0,
+      bounceCount:0
     });
     state.possessionTeam=null;
     state.possessionPlayer=null;
@@ -170,6 +179,14 @@
   function teamOfPlayerIndex(i){ return i<2?0:1; }
   function otherMateIndex(i){
     if(i===0)return 1;if(i===1)return 0;if(i===2)return 3;return 2;
+  }
+
+  function switchHumanPlayer(){
+    state.controlled=state.controlled===0?1:0;
+  }
+
+  function isDefending(){
+    return state.possessionTeam===1;
   }
 
   function closestPoint(px,py,a,b){
@@ -216,9 +233,10 @@
     releaseBall();
     b.vx=d.x*(lob?430:610);
     b.vy=d.y*(lob?430:610);
-    b.airborne=lob;
-    b.height=lob?18:0;
-    b.vz=lob?360:0;
+    b.airborne=true;
+    b.height=lob?18:3;
+    b.vz=lob?390:95;
+    b.bounceCount=0;
     b.noPickupUntil=performance.now()+260;
     b.lastTouch=i;
     state.controlled=targetI;
@@ -234,6 +252,10 @@
     releaseBall();
     state.ball.vx=d.x*(820*power);
     state.ball.vy=d.y*(820*power);
+    state.ball.airborne=true;
+    state.ball.height=5;
+    state.ball.vz=145+55*power;
+    state.ball.bounceCount=0;
     state.ball.curve=curved ? (state.move.x===0?0.32:Math.sign(state.move.x)*0.32) : 0;
     state.ball.noPickupUntil=performance.now()+180;
     state.ball.lastTouch=i;
@@ -313,7 +335,9 @@
       if(state.sixSecond<=2.2 || Math.random()<dt*0.5){
         const d=norm(COURT.cx-b.x,COURT.bottom+10-b.y);
         releaseBall();
-        b.vx=d.x*760;b.vy=d.y*760;b.lastTouch=2;b.noPickupUntil=performance.now()+180;
+        b.vx=d.x*760;b.vy=d.y*760;
+        b.airborne=true;b.height=5;b.vz=165;b.bounceCount=0;
+        b.lastTouch=2;b.noPickupUntil=performance.now()+180;
       }
     }
     const d=norm(tx-f.x,ty-f.y);
@@ -355,10 +379,25 @@
 
     if(b.airborne){
       b.height+=b.vz*dt;
-      b.vz-=760*dt;
+      b.vz-=690*dt;
       if(b.height<=0){
-        b.height=0;b.vz=0;b.airborne=false;
-        b.vx*=0.78;b.vy*=0.78;
+        b.height=0;
+        const impact=Math.abs(b.vz);
+
+        // フットサルボールではなく、サッカーボールらしく何度か弾む。
+        if(impact>82 && b.bounceCount<5){
+          b.vz=impact*0.61;
+          b.airborne=true;
+          b.bounceCount+=1;
+          b.vx*=0.91;
+          b.vy*=0.91;
+        }else{
+          b.vz=0;
+          b.airborne=false;
+          b.bounceCount=0;
+          b.vx*=0.86;
+          b.vy*=0.86;
+        }
       }
     }
 
@@ -394,6 +433,10 @@
             const rx=n.x*Math.cos(ang)-n.y*Math.sin(ang);
             const ry=n.x*Math.sin(ang)+n.y*Math.cos(ang);
             b.vx=rx*s*0.23;b.vy=ry*s*0.23;
+            b.airborne=true;
+            b.height=Math.max(b.height,3);
+            b.vz=Math.max(b.vz,110);
+            b.bounceCount=0;
             b.noPickupUntil=now+120;
           }
           break;
@@ -426,7 +469,8 @@
       // 低い球は膝ほどの坂に当たり、前へ抜けながら上へ跳ねる。
       b.airborne=true;
       b.height=Math.max(b.height,5);
-      b.vz=clamp(150+speed*0.30,190,390);
+      b.vz=clamp(180+speed*0.34,230,430);
+      b.bounceCount=0;
       b.vx*=0.88;
       b.vy=travelDirection*Math.max(Math.abs(b.vy)*0.78,115);
 
@@ -616,13 +660,19 @@
       ctx.font="900 21px system-ui";
       ctx.fillText(`6秒ルール: ${Math.max(0,state.sixSecond)}秒`,W/2,101);
     }
+
+    const defending=isDefending();
+    actionButtons.a.textContent=defending?"キャラ切替":"ゴロパス";
+    actionButtons.b.textContent=defending?"撃ち返し":"浮きパス";
+    actionButtons.c.textContent=defending?"パンチ":"直線シュート";
+    actionButtons.d.textContent=defending?"キャッチ":"回転シュート";
   }
 
   // keyboard
   addEventListener("keydown",e=>{
     state.keys[e.code]=true;
     if(e.code==="KeyL"){
-      state.controlled=state.controlled===0?1:0;
+      switchHumanPlayer();
     }else if(e.code==="KeyJ"){
       pass(false);
     }else if(e.code==="KeyK"){
@@ -674,7 +724,10 @@
   document.querySelectorAll(".action").forEach(btn=>{
     btn.addEventListener("pointerdown",()=>{
       const a=btn.dataset.action;
-      if(a==="passGround")pass(false);
+      if(a==="passGround"){
+        if(isDefending()) switchHumanPlayer();
+        else pass(false);
+      }
       if(a==="passLob")pass(true);
       if(a==="shootStraight")shoot(false,1);
       if(a==="shootCurve")shoot(true,1);
