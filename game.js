@@ -524,14 +524,27 @@
         if(dist<p.r+b.r+8){
           if(now<b.contactLockUntil) break;
 
-          if(b.airborne && b.height>14){
-            // 強引なボレー。接触後は少し長めに再接触を禁止。
-            const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
-            const d=norm(COURT.cx-b.x,targetY-b.y);
-            b.vx=d.x*760;b.vy=d.y*760;b.vz=105;b.height=Math.max(8,b.height*0.35);
-            b.lastTouch=i;
-            b.noPickupUntil=now+260;
-            b.contactLockUntil=now+260;
+          const lastTouchTeam =
+  b.lastTouch === null ? null : teamOfPlayerIndex(b.lastTouch);
+
+const isTeammateLob =
+  b.airborne &&
+  b.height > 14 &&
+  lastTouchTeam === teamOfPlayerIndex(i);
+
+if(isTeammateLob){
+  // 味方の浮きパスだけ自動ボレーする。
+  const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
+  const d=norm(COURT.cx-b.x,targetY-b.y);
+
+  b.vx=d.x*760;
+  b.vy=d.y*760;
+  b.vz=105;
+  b.height=Math.max(8,b.height*0.35);
+  b.lastTouch=i;
+  b.noPickupUntil=now+320;
+  b.contactLockUntil=now+320;
+
           }else if(Math.hypot(b.vx,b.vy)<285){
             holdBall(i);
             b.contactLockUntil=now+180;
@@ -556,8 +569,8 @@
 
             // 選手同士が密着している場所から外へ押し出す。
             const away=norm(b.x-p.x,b.y-p.y);
-            b.x+=away.x*12;
-            b.y+=away.y*12;
+            b.x+=away.x*30;
+            b.y+=away.y*30;
           }
           break;
         }
