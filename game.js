@@ -64,13 +64,23 @@
     possessionTeam:null,
     possessionPlayer:null,
     lastPossessionTeam:null,
+    charge:{
+      active:false,
+      type:null,
+      startedAt:0,
+      level:0,
+      pointerId:null
+    },
+    lastTap:{ straight:0, curve:0 },
     ball:{
       x:W/2,y:H/2,vx:0,vy:0,r:14,visualR:17,
       airborne:false,height:0,vz:0,
       noPickupUntil:0, lastTouch:null,
       curve:0, stealth:0, breakShot:false,
+      wobble:0, wobblePhase:0,
       previousY:H/2, ridgeCooldown:0,
-      bounceCount:0
+      bounceCount:0,
+      contactLockUntil:0
     },
     players:[],
     walls:[]
@@ -149,6 +159,11 @@
     state.score=[0,0];
     state.controlled=0;
     state.sixSecond=6;
+    state.charge.active=false;
+    state.charge.type=null;
+    state.charge.startedAt=0;
+    state.charge.level=0;
+    state.charge.pointerId=null;
     state.possessionTeam=null;
     state.possessionPlayer=null;
     state.lastPossessionTeam=null;
@@ -168,8 +183,10 @@
       airborne:false,height:0,vz:0,
       noPickupUntil:performance.now()+500,
       lastTouch:null,curve:0,stealth:0,breakShot:false,
+      wobble:0,wobblePhase:0,
       previousY:H/2,ridgeCooldown:0,
-      bounceCount:0
+      bounceCount:0,
+      contactLockUntil:0
     });
     state.possessionTeam=null;
     state.possessionPlayer=null;
@@ -216,6 +233,10 @@
     state.ball.airborne=false;
     state.ball.height=0;
     state.ball.lastTouch=i;
+    state.ball.wobble=0;
+    state.ball.curve=0;
+    state.ball.contactLockUntil=performance.now()+150;
+    cancelCharge();
   }
 
   function releaseBall(){
@@ -242,23 +263,82 @@
     state.controlled=targetI;
   }
 
-  function shoot(curved=false, power=1){
+  function shoot(curved=false, power=1, forcedHalf=false){
     const i=state.controlled;
     if(state.possessionPlayer!==i) return;
+
     const p=state.players[i];
     const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
-    const aimX=COURT.cx + state.move.x*140;
+    const aimX=COURT.cx + state.move.x*155;
     const d=norm(aimX-state.ball.x,targetY-state.ball.y);
+
     releaseBall();
-    state.ball.vx=d.x*(820*power);
-    state.ball.vy=d.y*(820*power);
+
+    const shotPower=forcedHalf ? 1.22 : power;
+    state.ball.vx=d.x*(820*shotPower);
+    state.ball.vy=d.y*(820*shotPower);
     state.ball.airborne=true;
     state.ball.height=5;
-    state.ball.vz=145+55*power;
+    state.ball.vz=145+65*shotPower;
     state.ball.bounceCount=0;
-    state.ball.curve=curved ? (state.move.x===0?0.32:Math.sign(state.move.x)*0.32) : 0;
-    state.ball.noPickupUntil=performance.now()+180;
+    state.ball.curve=curved
+      ? (state.move.x===0 ? 0.18 : Math.sign(state.move.x)*0.18) * shotPower
+      : 0;
+
+    // フルチャージのストレートだけブレ球。
+    state.ball.wobble=(!curved && shotPower>=1.5) ? 1 : 0;
+    state.ball.wobblePhase=0;
+
+    state.ball.noPickupUntil=performance.now()+210;
+    state.ball.contactLockUntil=performance.now()+210;
     state.ball.lastTouch=i;
+  }
+
+  function beginCharge(type, pointerId=null){
+    const curved=type==="curve";
+    const now=performance.now();
+
+    // 素早い2回押しでハーフチャージ。
+    const last=state.lastTap[type] || 0;
+    if(now-last<=280){
+      state.lastTap[type]=0;
+      shoot(curved,1.22,true);
+      return;
+    }
+
+    state.lastTap[type]=now;
+    if(state.possessionPlayer!==state.controlled) return;
+
+    state.charge.active=true;
+    state.charge.type=type;
+    state.charge.startedAt=now;
+    state.charge.level=0;
+    state.charge.pointerId=pointerId;
+  }
+
+  function releaseCharge(type){
+    if(!state.charge.active || state.charge.type!==type) return;
+
+    const held=(performance.now()-state.charge.startedAt)/1000;
+    const curved=type==="curve";
+
+    // 0.18秒未満は通常、0.18〜0.48秒はハーフ、0.48秒以上はフル。
+    let power=1;
+    if(held>=0.48) power=1.55;
+    else if(held>=0.18) power=1.24;
+
+    shoot(curved,power,false);
+    state.charge.active=false;
+    state.charge.type=null;
+    state.charge.level=0;
+    state.charge.pointerId=null;
+  }
+
+  function cancelCharge(){
+    state.charge.active=false;
+    state.charge.type=null;
+    state.charge.level=0;
+    state.charge.pointerId=null;
   }
 
   function startGame(){
@@ -294,6 +374,7 @@
       if(state.remaining<=0){ state.running=false; draw(); setTimeout(()=>location.reload(),1600); return; }
     }
 
+    updateCharge();
     updateHuman(dt);
     updateCPU(dt);
     updateKeepers(dt);
@@ -301,6 +382,17 @@
     updatePossession(now);
     constrainPlayers();
     checkGoals();
+  }
+
+  function updateCharge(){
+    if(!state.charge.active) return;
+    if(state.possessionPlayer!==state.controlled){
+      cancelCharge();
+      return;
+    }
+
+    const held=(performance.now()-state.charge.startedAt)/1000;
+    state.charge.level=clamp(held/0.48,0,1);
   }
 
   function turnover(team){
@@ -371,9 +463,23 @@
       const speed=Math.hypot(b.vx,b.vy);
       if(speed>40){
         const nx=-b.vy/speed, ny=b.vx/speed;
-        b.vx+=nx*b.curve*220*dt;
-        b.vy+=ny*b.curve*220*dt;
-        b.curve*=Math.pow(0.30,dt);
+        b.vx+=nx*b.curve*150*dt;
+        b.vy+=ny*b.curve*150*dt;
+        b.curve*=Math.pow(0.24,dt);
+      }
+    }
+
+    if(b.wobble>0){
+      const speed=Math.hypot(b.vx,b.vy);
+      if(speed>120){
+        b.wobblePhase+=dt*18;
+        const nx=-b.vy/speed, ny=b.vx/speed;
+        const force=Math.sin(b.wobblePhase)*105*b.wobble;
+        b.vx+=nx*force*dt;
+        b.vy+=ny*force*dt;
+        b.wobble*=Math.pow(0.62,dt);
+      }else{
+        b.wobble=0;
       }
     }
 
@@ -416,28 +522,42 @@
         const p=state.players[i];
         const dist=Math.hypot(b.x-p.x,b.y-p.y);
         if(dist<p.r+b.r+8){
+          if(now<b.contactLockUntil) break;
+
           if(b.airborne && b.height>14){
-            // 強引なボレー
+            // 強引なボレー。接触後は少し長めに再接触を禁止。
             const targetY=p.side==="bottom"?COURT.top-18:COURT.bottom+18;
             const d=norm(COURT.cx-b.x,targetY-b.y);
-            b.vx=d.x*760;b.vy=d.y*760;b.vz=80;b.height=Math.max(8,b.height*0.35);
-            b.lastTouch=i;b.noPickupUntil=now+220;
-          }else if(Math.hypot(b.vx,b.vy)<250){
+            b.vx=d.x*760;b.vy=d.y*760;b.vz=105;b.height=Math.max(8,b.height*0.35);
+            b.lastTouch=i;
+            b.noPickupUntil=now+260;
+            b.contactLockUntil=now+260;
+          }else if(Math.hypot(b.vx,b.vy)<285){
             holdBall(i);
+            b.contactLockUntil=now+180;
           }else{
-            // 人に当たった強い球は横へ弱くこぼれる
+            // 強い球は正面へ返さず、横へ大きくこぼし、速度を大幅に失う。
             const s=Math.hypot(b.vx,b.vy);
             const n=norm(b.vx,b.vy);
             const side=(Math.random()<.5?-1:1);
-            const ang=side*Math.PI/5;
+            const ang=side*(Math.PI/4.3);
             const rx=n.x*Math.cos(ang)-n.y*Math.sin(ang);
             const ry=n.x*Math.sin(ang)+n.y*Math.cos(ang);
-            b.vx=rx*s*0.23;b.vy=ry*s*0.23;
+
+            b.vx=rx*s*0.18;
+            b.vy=ry*s*0.18;
             b.airborne=true;
             b.height=Math.max(b.height,3);
-            b.vz=Math.max(b.vz,110);
+            b.vz=Math.max(b.vz,95);
             b.bounceCount=0;
-            b.noPickupUntil=now+120;
+            b.noPickupUntil=now+300;
+            b.contactLockUntil=now+300;
+            b.lastTouch=i;
+
+            // 選手同士が密着している場所から外へ押し出す。
+            const away=norm(b.x-p.x,b.y-p.y);
+            b.x+=away.x*12;
+            b.y+=away.y*12;
           }
           break;
         }
@@ -666,20 +786,46 @@
     actionButtons.b.textContent=defending?"撃ち返し":"浮きパス";
     actionButtons.c.textContent=defending?"パンチ":"直線シュート";
     actionButtons.d.textContent=defending?"キャッチ":"回転シュート";
+
+    if(state.charge.active){
+      const x=W/2-125, y=H-34, width=250, height=14;
+      ctx.fillStyle="rgba(3,11,20,.76)";
+      ctx.fillRect(x,y,width,height);
+      ctx.strokeStyle="#d5fff8";
+      ctx.lineWidth=2;
+      ctx.strokeRect(x,y,width,height);
+
+      const level=clamp(state.charge.level,0,1);
+      ctx.fillStyle=level>=1?"#ffdb6e":level>=0.38?"#72f0dc":"#69bde8";
+      ctx.fillRect(x+2,y+2,(width-4)*level,height-4);
+
+      ctx.fillStyle="#ffffff";
+      ctx.font="800 14px system-ui";
+      ctx.fillText(state.charge.type==="curve"?"CURVE CHARGE":"STRAIGHT CHARGE",W/2,y-7);
+    }
   }
 
   // keyboard
   addEventListener("keydown",e=>{
+    if(state.keys[e.code]) return;
     state.keys[e.code]=true;
+
     if(e.code==="KeyL"){
       switchHumanPlayer();
     }else if(e.code==="KeyJ"){
       pass(false);
     }else if(e.code==="KeyK"){
-      shoot(false,1);
+      beginCharge("straight");
+    }else if(e.code==="KeyI"){
+      beginCharge("curve");
     }
   });
-  addEventListener("keyup",e=>state.keys[e.code]=false);
+
+  addEventListener("keyup",e=>{
+    state.keys[e.code]=false;
+    if(e.code==="KeyK") releaseCharge("straight");
+    if(e.code==="KeyI") releaseCharge("curve");
+  });
 
   function updateKeyboardMove(){
     let x=0,y=0;
@@ -722,15 +868,28 @@
   stick.addEventListener("pointerup",endStick);stick.addEventListener("pointercancel",endStick);
 
   document.querySelectorAll(".action").forEach(btn=>{
-    btn.addEventListener("pointerdown",()=>{
+    btn.addEventListener("pointerdown",e=>{
+      e.preventDefault();
+      btn.setPointerCapture?.(e.pointerId);
       const a=btn.dataset.action;
+
       if(a==="passGround"){
         if(isDefending()) switchHumanPlayer();
         else pass(false);
       }
       if(a==="passLob")pass(true);
-      if(a==="shootStraight")shoot(false,1);
-      if(a==="shootCurve")shoot(true,1);
+      if(a==="shootStraight")beginCharge("straight",e.pointerId);
+      if(a==="shootCurve")beginCharge("curve",e.pointerId);
+    });
+
+    btn.addEventListener("pointerup",e=>{
+      const a=btn.dataset.action;
+      if(a==="shootStraight")releaseCharge("straight");
+      if(a==="shootCurve")releaseCharge("curve");
+    });
+
+    btn.addEventListener("pointercancel",()=>{
+      cancelCharge();
     });
   });
 
