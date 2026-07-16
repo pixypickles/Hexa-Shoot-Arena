@@ -567,7 +567,10 @@
       for(let i=0;i<state.players.length;i++){
         const p=state.players[i];
         const dist=Math.hypot(b.x-p.x,b.y-p.y);
-        if(dist<p.r+b.r+8){
+        const blockReach=p.r+b.r+(p.role==="field" ? 24 : 8);
+        const canReachHeight=p.role!=="field" || b.height<=58;
+
+        if(dist<blockReach && canReachHeight){
           if(now<b.contactLockUntil) break;
 
           const lastTouchTeam =
@@ -707,10 +710,11 @@
       // 低い球は膝ほどの坂に当たり、前へ抜けながら上へ跳ねる。
       b.airborne=true;
       b.height=Math.max(b.height,5);
-      b.vz=clamp(180+speed*0.34,230,430);
+      // 正面のFPを簡単に飛び越えない、低めの跳ね方。
+      b.vz=clamp(120+speed*0.20,155,285);
       b.bounceCount=0;
-      b.vx*=0.88;
-      b.vy=travelDirection*Math.max(Math.abs(b.vy)*0.78,115);
+      b.vx*=0.84;
+      b.vy=travelDirection*Math.max(Math.abs(b.vy)*0.66,92);
 
       // 頂点で止まらないよう進行方向側へ押し出す。
       b.y=COURT.cy+travelDirection*(COURT.ridgeHalfWidth+1);
@@ -792,7 +796,11 @@
     if(Math.hypot(b.vx,b.vy)>250) return;
     for(let i=0;i<state.players.length;i++){
       const p=state.players[i];
-      if(Math.hypot(b.x-p.x,b.y-p.y)<p.r+b.r+4){ holdBall(i); break; }
+      const pickupReach=p.r+b.r+(p.role==="field" ? 12 : 4);
+      if(Math.hypot(b.x-p.x,b.y-p.y)<pickupReach && b.height<=42){
+        holdBall(i);
+        break;
+      }
     }
   }
 
