@@ -24,7 +24,8 @@
     bumperSideOffset: 62,
     bumperGoalOffset: 66,
     warpGateRadius: 42,
-    warpExitInset: 62,
+    warpGateInset: 72,
+    warpExitInset: 78,
     ridgeHalfWidth: 22,
     ridgeVisualHeight: 15
   };
@@ -150,18 +151,18 @@
     const goal=COURT.bumperGoalOffset;
 
     state.bumpers=[
-      {x:COURT.cx-half-side,y:COURT.top+goal,r,spin:1,angle:0,flashUntil:0},
-      {x:COURT.cx+half+side,y:COURT.top+goal,r,spin:-1,angle:0,flashUntil:0},
-      {x:COURT.cx-half-side,y:COURT.bottom-goal,r,spin:-1,angle:0,flashUntil:0},
-      {x:COURT.cx+half+side,y:COURT.bottom-goal,r,spin:1,angle:0,flashUntil:0}
+      {x:COURT.cx-half-34,y:COURT.top+44,r,spin:1,angle:0,flashUntil:0},
+      {x:COURT.cx+half+34,y:COURT.top+44,r,spin:-1,angle:0,flashUntil:0},
+      {x:COURT.cx-half-34,y:COURT.bottom-44,r,spin:-1,angle:0,flashUntil:0},
+      {x:COURT.cx+half+34,y:COURT.bottom-44,r,spin:1,angle:0,flashUntil:0}
     ];
   }
 
   function makeWarpGates(){
     const r=COURT.warpGateRadius;
     state.warpGates=[
-      {side:-1,x:COURT.left,y:COURT.cy,r,angle:0,flashUntil:0},
-      {side:1,x:COURT.right,y:COURT.cy,r,angle:0,flashUntil:0}
+      {side:-1,x:COURT.left+COURT.warpGateInset,y:COURT.cy,r,angle:0,flashUntil:0},
+      {side:1,x:COURT.right-COURT.warpGateInset,y:COURT.cy,r,angle:0,flashUntil:0}
     ];
   }
 
@@ -1134,11 +1135,11 @@
       const goalY=bumper.y<COURT.cy ? COURT.top-20 : COURT.bottom+20;
       const goalDirection=norm(COURT.cx-b.x,goalY-b.y);
 
-      const finalX=reflectedX*0.48+tangent.x*0.32+goalDirection.x*0.20;
-      const finalY=reflectedY*0.48+tangent.y*0.32+goalDirection.y*0.20;
+      const finalX=reflectedX*0.34+tangent.x*0.34+goalDirection.x*0.32;
+      const finalY=reflectedY*0.34+tangent.y*0.34+goalDirection.y*0.32;
       const finalDirection=norm(finalX,finalY);
 
-      const boostedSpeed=clamp(speed*1.22,520,1050);
+      const boostedSpeed=clamp(speed*1.18,500,980);
       b.vx=finalDirection.x*boostedSpeed;
       b.vy=finalDirection.y*boostedSpeed;
 
@@ -1164,25 +1165,24 @@
       if(Math.hypot(dx,dy)>gate.r+b.r) continue;
 
       const speed=Math.max(320,Math.hypot(b.vx,b.vy));
+      const incomingDirection=norm(b.vx,b.vy);
       const exitSide=-gate.side;
       const exitX=exitSide<0
         ? COURT.left+COURT.warpExitInset
         : COURT.right-COURT.warpExitInset;
 
-      const verticalMemory=clamp(b.vy/Math.max(speed,1),-0.62,0.62);
-      const towardCenterX=exitSide<0 ? 1 : -1;
-      const exitDirection=norm(towardCenterX*0.88,verticalMemory*0.72);
-      const boostedSpeed=clamp(speed*1.25,520,1180);
+      // 入射角度はそのまま、速度のみ2倍へ。
+      const boostedSpeed=clamp(speed*2.0,640,1500);
 
       b.x=exitX;
-      b.y=clamp(COURT.cy+verticalMemory*110,COURT.cy-120,COURT.cy+120);
-      b.vx=exitDirection.x*boostedSpeed;
-      b.vy=exitDirection.y*boostedSpeed;
+      b.y=clamp(b.y,COURT.cy-125,COURT.cy+125);
+      b.vx=incomingDirection.x*boostedSpeed;
+      b.vy=incomingDirection.y*boostedSpeed;
       b.airborne=true;
       b.height=Math.max(7,b.height);
       b.vz=Math.max(b.vz,170);
       b.bounceCount=0;
-      b.warpLockUntil=now+360;
+      b.warpLockUntil=now+420;
       b.warpFlashUntil=now+180;
       b.noPickupUntil=now+220;
       b.contactLockUntil=now+220;
@@ -1199,8 +1199,14 @@
     const b=state.ball;
     for(const w of state.walls){
       const q=closestPoint(b.x,b.y,w.a,w.b);
-      const nearLeftGate=Math.hypot(q.x-COURT.left,q.y-COURT.cy)<COURT.warpGateRadius+18;
-      const nearRightGate=Math.hypot(q.x-COURT.right,q.y-COURT.cy)<COURT.warpGateRadius+18;
+      const nearLeftGate=Math.hypot(
+        q.x-(COURT.left+COURT.warpGateInset),
+        q.y-COURT.cy
+      )<COURT.warpGateRadius+24;
+      const nearRightGate=Math.hypot(
+        q.x-(COURT.right-COURT.warpGateInset),
+        q.y-COURT.cy
+      )<COURT.warpGateRadius+24;
       if(nearLeftGate || nearRightGate) continue;
 
       const dx=b.x-q.x,dy=b.y-q.y,d=Math.hypot(dx,dy);
